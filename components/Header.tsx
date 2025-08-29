@@ -4,9 +4,15 @@ import type { Staff } from '../types';
 interface HeaderProps {
     currentUser: Staff;
     onLogout: () => void;
-    onNavigate: (view: 'calendar' | 'planner') => void;
-    currentView: 'calendar' | 'planner';
+    onNavigate: (view: 'calendar' | 'planner' | 'personnel') => void;
+    currentView: 'calendar' | 'planner' | 'personnel';
 }
+
+const viewTitles: Record<HeaderProps['currentView'], string> = {
+    calendar: 'Gestione Turni Ospedalieri',
+    planner: 'Pianificazione Automatica',
+    personnel: 'Gestione Personale'
+};
 
 export const Header: React.FC<HeaderProps> = ({ currentUser, onLogout, onNavigate, currentView }) => {
     return (
@@ -18,11 +24,11 @@ export const Header: React.FC<HeaderProps> = ({ currentUser, onLogout, onNavigat
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                         </svg>
                         <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 ml-3">
-                           {currentView === 'calendar' ? 'Gestione Turni Ospedalieri' : 'Pianificazione Automatica'}
+                           {viewTitles[currentView]}
                         </h1>
                     </div>
                     <div className="flex items-center space-x-4">
-                        {currentView === 'planner' && (
+                        {currentView !== 'calendar' && (
                              <button onClick={() => onNavigate('calendar')} className="flex items-center px-3 py-1 text-sm bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-4 h-4 mr-2">
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />

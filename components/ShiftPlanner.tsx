@@ -1,14 +1,14 @@
+
 // FIX: Import `useCallback` from `react` to resolve 'Cannot find name' error.
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import type { Staff, ScheduledShift, ShiftDefinition, ShiftRequirements, RequirementPreset } from '../types';
-import { UNASSIGNED_STAFF_ID, SHIFT_DEFINITIONS } from '../constants';
+import { UNASSIGNED_STAFF_ID } from '../constants';
 import { Location, ShiftTime, ContractType, StaffRole } from '../types';
 import { isShiftAllowed } from '../utils/shiftUtils';
 import { REQUIREMENT_PRESETS } from '../constants/plannerPresets';
 import type { ActiveTab } from '../App';
-
-type TeamName = 'Team Misto' | 'Team Sant\'Eugenio' | 'Team Santa Caterina' | 'Team CTO';
-type Teams = Record<TeamName, string[]>;
+import { AddShiftModal } from './AddShiftModal';
+import { EditShiftModal } from './EditShiftModal';
 
 interface ShiftPlannerProps {
     staffList: Staff[]; // This will be pre-filtered by App.tsx based on the active tab
@@ -16,20 +16,18 @@ interface ShiftPlannerProps {
     onGenerateSchedule: (newShifts: ScheduledShift[], targetMonth: string, affectedStaffIds: string[]) => void;
     getShiftDefinitionByCode: (code: string) => ShiftDefinition | undefined;
     scheduledShifts: ScheduledShift[];
+    shiftDefinitions: ShiftDefinition[];
+    onAddShift: (newShift: ShiftDefinition) => void;
+    deleteShiftDefinition: (code: string) => void;
+    updateShiftDefinition: (originalCode: string, updatedShift: ShiftDefinition) => void;
+    initialShiftDefinitions: ShiftDefinition[];
 }
-
-const initialTeams: Teams = {
-    'Team Misto': [],
-    'Team Sant\'Eugenio': [],
-    'Team Santa Caterina': [],
-    'Team CTO': [],
-};
 
 const weekDays = ['Dom', 'Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab'];
 const tabTitleMap: Record<ActiveTab, string> = {
     nurses: 'Infermieri e Caposala',
     oss: 'OSS',
-    doctors: 'Medici'
+    doctors: 'Medici',
 };
 
 // Helper to format date to YYYY-MM-DD without timezone issues
@@ -40,19 +38,25 @@ const formatDate = (date: Date): string => {
     return `${y}-${m}-${d}`;
 };
 
-export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab, onGenerateSchedule, getShiftDefinitionByCode, scheduledShifts }) => {
+export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab, onGenerateSchedule, getShiftDefinitionByCode, scheduledShifts, shiftDefinitions, onAddShift, deleteShiftDefinition, updateShiftDefinition, initialShiftDefinitions }) => {
     
-    const [teams, setTeams] = useState<Teams>(initialTeams);
-    const [selectedTeam, setSelectedTeam] = useState<TeamName>('Team Misto');
     const [requirements, setRequirements] = useState<ShiftRequirements>({});
     const [presets, setPresets] = useState<RequirementPreset[]>([]);
     const [selectedPresetId, setSelectedPresetId] = useState<string>('');
     const [targetDate, setTargetDate] = useState(new Date().toISOString().slice(0, 7));
     const [generationLog, setGenerationLog] = useState<string[]>([]);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [isConfirming, setIsConfirming] = useState(false);
+    const [isSavingPreset, setIsSavingPreset] = useState(false);
+    const [newPresetName, setNewPresetName] = useState('');
+    const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+    const [isAddShiftModalOpen, setIsAddShiftModalOpen] = useState(false);
+    const [editingShift, setEditingShift] = useState<ShiftDefinition | null>(null);
+
+    const initialShiftCodes = useMemo(() => new Set(initialShiftDefinitions.map(s => s.code)), [initialShiftDefinitions]);
     
     const relevantShifts = useMemo(() => {
-        return SHIFT_DEFINITIONS.filter(s => {
+        return shiftDefinitions.filter(s => {
             if (s.time === ShiftTime.Absence || s.time === ShiftTime.Rest || s.time === ShiftTime.OffShift) return false;
             switch(activeTab) {
                 case 'nurses':
@@ -65,7 +69,7 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                     return false;
             }
         }).sort((a,b) => a.code.localeCompare(b.code));
-    }, [activeTab]);
+    }, [activeTab, shiftDefinitions]);
 
     const handlePresetChange = useCallback((presetId: string) => {
         setSelectedPresetId(presetId);
@@ -73,39 +77,48 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
         if (selected) {
             setRequirements(JSON.parse(JSON.stringify(selected.requirements)));
         }
+        setIsConfirmingDelete(false); // Annulla la conferma di eliminazione quando si cambia template
     }, [presets]);
+
+    // Helper function to save user-created presets to localStorage.
+    const saveUserPresets = useCallback((currentPresets: RequirementPreset[]) => {
+        const userPresetsToSave = currentPresets.filter(p => !p.id.startsWith('preset-'));
+        try {
+            localStorage.setItem(`userPresets_${activeTab}`, JSON.stringify(userPresetsToSave));
+        } catch (error) {
+            console.error("Failed to save user presets to localStorage:", error);
+        }
+    }, [activeTab]);
     
-    // Effect to update planner context when the active tab changes
+    // Effect to load presets from constants and localStorage when the tab changes.
     useEffect(() => {
-        const relevantPresets = REQUIREMENT_PRESETS.filter(p => p.role === activeTab || p.role === 'all');
-        setPresets(relevantPresets);
+        const defaultPresets = REQUIREMENT_PRESETS.filter(p => p.role === activeTab || p.role === 'all');
+        let userPresets: RequirementPreset[] = [];
+        try {
+            const savedData = localStorage.getItem(`userPresets_${activeTab}`);
+            if (savedData) {
+                userPresets = JSON.parse(savedData);
+            }
+        } catch (error) {
+            console.error("Failed to parse user presets from localStorage:", error);
+            localStorage.removeItem(`userPresets_${activeTab}`);
+        }
+        
+        const allPresets = [...defaultPresets, ...userPresets];
+        setPresets(allPresets);
 
-        // Prefer loading the first non-empty preset for the role.
-        const firstMeaningfulPreset = relevantPresets.find(p => p.id !== 'preset-empty');
-        const presetToLoad = firstMeaningfulPreset || relevantPresets[0]; // Fallback to the very first one (e.g., 'preset-empty')
+        const initialPresetToLoad = userPresets[0] || defaultPresets.find(p => p.id !== 'preset-empty') || defaultPresets[0];
 
-        if (presetToLoad) {
-            setSelectedPresetId(presetToLoad.id);
-            // Deep copy requirements to avoid mutation
-            setRequirements(JSON.parse(JSON.stringify(presetToLoad.requirements)));
+        if (initialPresetToLoad) {
+            setSelectedPresetId(initialPresetToLoad.id);
+            setRequirements(JSON.parse(JSON.stringify(initialPresetToLoad.requirements)));
         } else {
-             // This should not happen with current data, but it's a safe fallback.
              setSelectedPresetId('');
              setRequirements({});
         }
+        setIsConfirmingDelete(false);
     }, [activeTab]);
 
-
-    const handleTeamChange = (staffId: string, team: TeamName) => {
-        setTeams(prev => {
-            const newTeams = { ...prev };
-            Object.keys(newTeams).forEach(key => {
-                newTeams[key as TeamName] = newTeams[key as TeamName].filter(id => id !== staffId);
-            });
-            newTeams[team].push(staffId);
-            return newTeams;
-        });
-    };
 
     const handleRequirementChange = (code: string, dayIndex: number, value: number) => {
         setRequirements(prev => ({
@@ -113,11 +126,15 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
             [code]: (prev[code] || Array(7).fill(0)).map((v, i) => i === dayIndex ? Math.max(0, value) : v)
         }));
     };
-
-    const handleSaveAsPreset = () => {
+    
+    const handleConfirmSavePreset = () => {
         const roleName = tabTitleMap[activeTab];
-        const name = window.prompt(`Inserisci il nome per il nuovo template (${roleName}):`);
-        if (!name || name.trim() === "") return;
+        const name = newPresetName;
+
+        if (!name || name.trim() === "") {
+            alert("Il nome del template non può essere vuoto.");
+            return;
+        }
 
         const fullName = `${name.trim()} (${roleName})`;
 
@@ -131,9 +148,14 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
             requirements: JSON.parse(JSON.stringify(requirements)),
             role: activeTab,
         };
-        setPresets(prev => [...prev, newPreset]);
+        const newPresets = [...presets, newPreset];
+        setPresets(newPresets);
+        saveUserPresets(newPresets);
         setSelectedPresetId(newPreset.id);
         alert(`Template "${name.trim()}" salvato con successo.`);
+
+        setIsSavingPreset(false);
+        setNewPresetName('');
     };
     
     const handleRenamePreset = () => {
@@ -154,7 +176,10 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
             alert("Esiste già un template con questo nome.");
             return;
         }
-        setPresets(prev => prev.map(p => p.id === selectedPresetId ? { ...p, name: finalNewName } : p));
+
+        const newPresets = presets.map(p => p.id === selectedPresetId ? { ...p, name: finalNewName } : p);
+        setPresets(newPresets);
+        saveUserPresets(newPresets);
     };
 
     const handleDeletePreset = () => {
@@ -163,24 +188,29 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
             alert("I template di default non possono essere eliminati.");
             return;
         }
-        if (window.confirm(`Sei sicuro di voler eliminare il template "${selectedPreset.name}"?`)) {
-            const newPresets = presets.filter(p => p.id !== selectedPresetId);
-            setPresets(newPresets);
+        setIsConfirmingDelete(true);
+    };
 
-            // After deleting, select the first available preset from the updated list.
-            const presetToLoad = newPresets.find(p => p.id !== 'preset-empty') || newPresets[0];
-            
-            if (presetToLoad) {
-                setSelectedPresetId(presetToLoad.id);
-                setRequirements(JSON.parse(JSON.stringify(presetToLoad.requirements)));
-            } else {
-                const emptyPreset = REQUIREMENT_PRESETS.find(p => p.id === 'preset-empty');
-                if (emptyPreset) {
-                    setSelectedPresetId(emptyPreset.id);
-                    setRequirements(JSON.parse(JSON.stringify(emptyPreset.requirements)));
-                }
+    const confirmDeletePreset = () => {
+        const newPresets = presets.filter(p => p.id !== selectedPresetId);
+        setPresets(newPresets);
+        saveUserPresets(newPresets);
+        
+        const presetToLoad = newPresets.find(p => !p.id.startsWith('preset-') && p.id !== 'preset-empty') || newPresets.find(p => p.id !== 'preset-empty') || newPresets[0];
+        
+        if (presetToLoad) {
+            handlePresetChange(presetToLoad.id);
+        } else {
+            const emptyPreset = REQUIREMENT_PRESETS.find(p => p.id === 'preset-empty');
+            if (emptyPreset) {
+                handlePresetChange(emptyPreset.id);
             }
         }
+        setIsConfirmingDelete(false);
+    };
+
+    const cancelDeletePreset = () => {
+        setIsConfirmingDelete(false);
     };
 
     const handleResetRequirements = () => {
@@ -188,207 +218,240 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
         if(emptyPreset) handlePresetChange(emptyPreset.id);
     };
     
-    const handleGenerate = () => {
+    const handleAddShift = (newShiftData: Omit<ShiftDefinition, 'roles'>) => {
+        const roles: StaffRole[] = [];
+        switch(activeTab) {
+            case 'nurses':
+                roles.push(StaffRole.Nurse, StaffRole.HeadNurse);
+                break;
+            case 'oss':
+                roles.push(StaffRole.OSS);
+                break;
+            case 'doctors':
+                roles.push(StaffRole.Doctor);
+                break;
+        }
+        onAddShift({ ...newShiftData, roles });
+        setIsAddShiftModalOpen(false);
+    };
+
+    const handleEditShiftClick = (shift: ShiftDefinition) => {
+        setEditingShift(shift);
+    };
+
+    const handleSaveShift = (updatedShift: ShiftDefinition) => {
+        if (editingShift) {
+            updateShiftDefinition(editingShift.code, updatedShift);
+        }
+        setEditingShift(null);
+    };
+    
+    const handleDeleteShift = (code: string) => {
+        deleteShiftDefinition(code);
+        setEditingShift(null);
+    };
+
+    const handleGenerate = useCallback(() => {
         setIsGenerating(true);
         setGenerationLog([]);
 
         setTimeout(() => {
-            const [year, month] = targetDate.split('-').map(Number);
-            const daysInMonth = new Date(year, month, 0).getDate();
-            const log: string[] = [`ℹ️ Inizio generazione per ${tabTitleMap[activeTab]} - ${targetDate}...`];
-            const newSchedule: ScheduledShift[] = [];
-            const staffAssignments: Record<string, Record<string, string>> = {};
+            try {
+                const [year, month] = targetDate.split('-').map(Number);
+                const daysInMonth = new Date(year, month, 0).getDate();
+                const log: string[] = [`ℹ️ Inizio generazione per ${tabTitleMap[activeTab]} - ${targetDate}...`];
+                const newSchedule: ScheduledShift[] = [];
+                const staffAssignments: Record<string, Record<string, string>> = {};
 
-            // --- GESTIONE SMONTO NOTTE DAL MESE PRECEDENTE ---
-            const firstDayOfMonth = new Date(year, month - 1, 1);
-            const lastDayOfPrevMonth = new Date(firstDayOfMonth.getTime() - (24 * 60 * 60 * 1000));
-            const lastDayOfPrevMonthStr = formatDate(lastDayOfPrevMonth);
-            const firstDayOfTargetMonthStr = formatDate(firstDayOfMonth);
-            
-            log.push(`ℹ️ Controllo smonto notte dal mese precedente (${lastDayOfPrevMonthStr}).`);
+                // --- GESTIONE SMONTO NOTTE DAL MESE PRECEDENTE ---
+                const firstDayOfMonth = new Date(year, month - 1, 1);
+                const lastDayOfPrevMonth = new Date(firstDayOfMonth.getTime() - (24 * 60 * 60 * 1000));
+                const lastDayOfPrevMonthStr = formatDate(lastDayOfPrevMonth);
+                const firstDayOfTargetMonthStr = formatDate(firstDayOfMonth);
 
-            staffList.forEach(staff => {
-                const lastMonthShift = scheduledShifts.find(s => s.staffId === staff.id && s.date === lastDayOfPrevMonthStr);
-                const lastMonthShiftDef = lastMonthShift?.shiftCode ? getShiftDefinitionByCode(lastMonthShift.shiftCode) : null;
+                log.push(`ℹ️ Controllo smonto notte dal mese precedente (${lastDayOfPrevMonthStr}).`);
 
-                if (lastMonthShiftDef && lastMonthShiftDef.time === ShiftTime.Night) {
-                    if (!staffAssignments[staff.id]) {
-                        staffAssignments[staff.id] = {};
-                    }
-                    staffAssignments[staff.id][firstDayOfTargetMonthStr] = 'S';
-                    log.push(`💡 Pre-assegnato smonto notte ('S') a ${staff.name} per il ${firstDayOfTargetMonthStr}.`);
-                }
-            });
+                staffList.forEach(staff => {
+                    const lastMonthShift = scheduledShifts.find(s => s.staffId === staff.id && s.date === lastDayOfPrevMonthStr);
+                    const lastMonthShiftDef = lastMonthShift?.shiftCode ? getShiftDefinitionByCode(lastMonthShift.shiftCode) : null;
 
-            // --- GESTIONE RIPOSO DOMENICALE (SPECIFICO PER INFERMIERI) ---
-            if (activeTab === 'nurses') {
-                 log.push(`ℹ️ Applica regola - Riposo Domenicale per Caposala, h6 e h12.`);
-                const staffToRestOnSunday = staffList.filter(s =>
-                    s.role === StaffRole.HeadNurse ||
-                    s.contract === ContractType.H6 ||
-                    s.contract === ContractType.H12
-                );
-                for (let day = 1; day <= daysInMonth; day++) {
-                    const date = new Date(year, month - 1, day);
-                    if (date.getDay() === 0) { // È Domenica
-                        const dateStr = formatDate(date);
-                        staffToRestOnSunday.forEach(staff => {
-                            if (!staffAssignments[staff.id]) staffAssignments[staff.id] = {};
-                            if (!staffAssignments[staff.id][dateStr]) {
-                                staffAssignments[staff.id][dateStr] = 'RS';
-                            }
-                        });
-                    }
-                }
-            }
-
-            // --- NUOVO ALGORITMO DI GENERAZIONE GIORNALIERO ---
-            const shiftTimePriority: Record<ShiftTime, number> = {
-                [ShiftTime.Night]: 1,
-                [ShiftTime.Afternoon]: 2,
-                [ShiftTime.Morning]: 3,
-                [ShiftTime.FullDay]: 4,
-                [ShiftTime.Absence]: 9,
-                [ShiftTime.Rest]: 9,
-                [ShiftTime.OffShift]: 9
-            };
-
-            for (let day = 1; day <= daysInMonth; day++) {
-                const date = new Date(year, month - 1, day);
-                const dateStr = formatDate(date);
-                const dayOfWeek = date.getDay();
-
-                // 1. Costruisce una lista prioritaria di tutti gli slot richiesti per il giorno
-                const requiredSlots: { code: string, originalIndex: number }[] = [];
-                Object.entries(requirements).forEach(([shiftCode, needs]) => {
-                    const neededCount = needs[dayOfWeek] || 0;
-                    for (let i = 0; i < neededCount; i++) {
-                        requiredSlots.push({code: shiftCode, originalIndex: i});
+                    if (lastMonthShiftDef && lastMonthShiftDef.time === ShiftTime.Night) {
+                        if (!staffAssignments[staff.id]) {
+                            staffAssignments[staff.id] = {};
+                        }
+                        staffAssignments[staff.id][firstDayOfTargetMonthStr] = 'S';
+                        log.push(`💡 Pre-assegnato smonto notte ('S') a ${staff.name} per il ${firstDayOfTargetMonthStr}.`);
                     }
                 });
-                
-                requiredSlots.sort((a, b) => {
-                    const defA = getShiftDefinitionByCode(a.code);
-                    const defB = getShiftDefinitionByCode(b.code);
-                    const priorityA = defA ? shiftTimePriority[defA.time] : 99;
-                    const priorityB = defB ? shiftTimePriority[defB.time] : 99;
-                    if (priorityA !== priorityB) {
-                        return priorityA - priorityB;
-                    }
-                    return a.code.localeCompare(b.code); // Ordinamento stabile per stessa priorità
-                });
-                
-                let dailyRequiredSlots = [...requiredSlots];
 
-                // 2. Ottiene il personale disponibile per questo giorno
-                let availableStaff = staffList.filter(s => !staffAssignments[s.id]?.[dateStr]);
-
-                if (dailyRequiredSlots.length > availableStaff.length) {
-                    log.push(`⚠️ Fabbisogno per ${dateStr} (${dailyRequiredSlots.length}) supera il personale disponibile (${availableStaff.length}). Saranno generati turni scoperti.`);
-                }
-                
-                // 3. Mescola il personale per variare le assegnazioni
-                availableStaff.sort(() => Math.random() - 0.5);
-                
-                // 4. Assegna i turni iterando sul personale
-                for (const staffMember of availableStaff) {
-                    // Trova lo slot a più alta priorità che questo membro può coprire
-                    const assignedSlotIndex = dailyRequiredSlots.findIndex(slot => 
-                        isShiftAllowed(slot.code, staffMember.contract, staffMember.role)
+                // --- GESTIONE RIPOSO DOMENICALE (SPECIFICO PER INFERMIERI) ---
+                if (activeTab === 'nurses') {
+                    log.push(`ℹ️ Applica regola - Riposo Domenicale per Caposala, h6 e h12.`);
+                    const staffToRestOnSunday = staffList.filter(s =>
+                        s.role === StaffRole.HeadNurse ||
+                        s.contract === ContractType.H6 ||
+                        s.contract === ContractType.H12
                     );
-
-                    if (assignedSlotIndex !== -1) {
-                        // Assegna il turno rimuovendolo dalla lista dei richiesti
-                        const [assignedShift] = dailyRequiredSlots.splice(assignedSlotIndex, 1);
-                        
-                        if (!staffAssignments[staffMember.id]) {
-                            staffAssignments[staffMember.id] = {};
-                        }
-                        staffAssignments[staffMember.id][dateStr] = assignedShift.code;
-
-                        // Gestisce lo smonto notte per il giorno successivo
-                        const shiftDef = getShiftDefinitionByCode(assignedShift.code);
-                        if (shiftDef?.time === ShiftTime.Night && day < daysInMonth) {
-                            const nextDate = new Date(year, month - 1, day + 1);
-                            const nextDateStr = formatDate(nextDate);
-                            if (!staffAssignments[staffMember.id]?.[nextDateStr]) {
-                                staffAssignments[staffMember.id][nextDateStr] = 'S';
-                            }
+                    for (let day = 1; day <= daysInMonth; day++) {
+                        const date = new Date(year, month - 1, day);
+                        if (date.getDay() === 0) { // È Domenica
+                            const dateStr = formatDate(date);
+                            staffToRestOnSunday.forEach(staff => {
+                                if (!staffAssignments[staff.id]) staffAssignments[staff.id] = {};
+                                if (!staffAssignments[staff.id][dateStr]) {
+                                    staffAssignments[staff.id][dateStr] = 'RS';
+                                }
+                            });
                         }
                     }
                 }
 
-                // 5. Gli slot rimanenti sono scoperti
-                dailyRequiredSlots.forEach((uncoveredSlot) => {
-                    log.push(`❌ Personale insufficiente per ${uncoveredSlot.code} il ${dateStr}.`);
-                    newSchedule.push({
-                        id: `uncovered-${dateStr}-${uncoveredSlot.code}-${uncoveredSlot.originalIndex}`,
-                        date: dateStr,
-                        staffId: UNASSIGNED_STAFF_ID,
-                        shiftCode: uncoveredSlot.code,
-                    });
-                });
-            }
+                // --- NUOVO ALGORITMO DI GENERAZIONE GIORNALIERO ---
+                const shiftTimePriority: Record<ShiftTime, number> = {
+                    [ShiftTime.Night]: 1,
+                    [ShiftTime.Afternoon]: 2,
+                    [ShiftTime.Morning]: 3,
+                    [ShiftTime.FullDay]: 4,
+                    [ShiftTime.Absence]: 9,
+                    [ShiftTime.Rest]: 9,
+                    [ShiftTime.OffShift]: 9
+                };
 
-            // --- FINALIZZAZIONE ---
-            // Popola il calendario finale con i turni assegnati
-            Object.entries(staffAssignments).forEach(([staffId, assignments]) => {
-                Object.entries(assignments).forEach(([date, shiftCode]) => {
-                    newSchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode });
-                });
-            });
-            
-            // Assegna 'R' (Riposo) a chi non ha ricevuto turni in un dato giorno
-            staffList.forEach(staff => {
                 for (let day = 1; day <= daysInMonth; day++) {
                     const date = new Date(year, month - 1, day);
                     const dateStr = formatDate(date);
-                    if (!staffAssignments[staff.id]?.[dateStr]) {
-                        newSchedule.push({ id: `${staff.id}-${dateStr}`, staffId: staff.id, date: dateStr, shiftCode: 'R' });
-                    }
-                }
-            });
+                    const dayOfWeek = date.getDay();
 
-            const assignedCount = newSchedule.filter(s => s.staffId !== UNASSIGNED_STAFF_ID).length;
-            log.push(`ℹ️ Generazione completata. ${assignedCount} turni assegnati.`);
-            setGenerationLog(log);
-            const affectedIds = [...staffList.map(s => s.id), UNASSIGNED_STAFF_ID];
-            onGenerateSchedule(newSchedule, targetDate, affectedIds);
-            setIsGenerating(false);
+                    const requiredSlots: { code: string, originalIndex: number }[] = [];
+                    Object.entries(requirements).forEach(([shiftCode, needs]) => {
+                        const neededCount = needs[dayOfWeek] || 0;
+                        for (let i = 0; i < neededCount; i++) {
+                            requiredSlots.push({ code: shiftCode, originalIndex: i });
+                        }
+                    });
+
+                    requiredSlots.sort((a, b) => {
+                        const defA = getShiftDefinitionByCode(a.code);
+                        const defB = getShiftDefinitionByCode(b.code);
+                        const priorityA = defA ? shiftTimePriority[defA.time] : 99;
+                        const priorityB = defB ? shiftTimePriority[defB.time] : 99;
+                        if (priorityA !== priorityB) {
+                            return priorityA - priorityB;
+                        }
+                        return a.code.localeCompare(b.code);
+                    });
+
+                    let dailyRequiredSlots = [...requiredSlots];
+                    let availableStaff = staffList.filter(s => !staffAssignments[s.id]?.[dateStr]);
+                    availableStaff.sort(() => Math.random() - 0.5);
+
+                    for (const staffMember of availableStaff) {
+                        const assignedSlotIndex = dailyRequiredSlots.findIndex(slot =>
+                            isShiftAllowed(slot.code, staffMember, shiftDefinitions)
+                        );
+
+                        if (assignedSlotIndex !== -1) {
+                            const [assignedShift] = dailyRequiredSlots.splice(assignedSlotIndex, 1);
+                            if (!staffAssignments[staffMember.id]) {
+                                staffAssignments[staffMember.id] = {};
+                            }
+                            staffAssignments[staffMember.id][dateStr] = assignedShift.code;
+
+                            const shiftDef = getShiftDefinitionByCode(assignedShift.code);
+                            if (shiftDef?.time === ShiftTime.Night && day < daysInMonth) {
+                                const nextDate = new Date(year, month - 1, day + 1);
+                                const nextDateStr = formatDate(nextDate);
+                                if (!staffAssignments[staffMember.id]?.[nextDateStr]) {
+                                    staffAssignments[staffMember.id][nextDateStr] = 'S';
+                                }
+                            }
+                        }
+                    }
+
+                    dailyRequiredSlots.forEach((uncoveredSlot) => {
+                        log.push(`❌ Personale insufficiente per ${uncoveredSlot.code} il ${dateStr}.`);
+                        newSchedule.push({
+                            id: `uncovered-${dateStr}-${uncoveredSlot.code}-${uncoveredSlot.originalIndex}`,
+                            date: dateStr,
+                            staffId: UNASSIGNED_STAFF_ID,
+                            shiftCode: uncoveredSlot.code,
+                        });
+                    });
+                }
+
+                Object.entries(staffAssignments).forEach(([staffId, assignments]) => {
+                    Object.entries(assignments).forEach(([date, shiftCode]) => {
+                        newSchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode });
+                    });
+                });
+
+                staffList.forEach(staff => {
+                    for (let day = 1; day <= daysInMonth; day++) {
+                        const date = new Date(year, month - 1, day);
+                        const dateStr = formatDate(date);
+                        if (!staffAssignments[staff.id]?.[dateStr]) {
+                            newSchedule.push({ id: `${staff.id}-${dateStr}`, staffId: staff.id, date: dateStr, shiftCode: 'R' });
+                        }
+                    }
+                });
+
+                const assignedCount = newSchedule.filter(s => s.staffId !== UNASSIGNED_STAFF_ID).length;
+                log.push(`✅ Generazione completata. ${assignedCount} turni assegnati.`);
+                setGenerationLog(log);
+                const affectedIds = [...staffList.map(s => s.id), UNASSIGNED_STAFF_ID];
+                onGenerateSchedule(newSchedule, targetDate, affectedIds);
+
+            } catch (error) {
+                console.error("Errore durante la generazione dei turni:", error);
+                const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+                setGenerationLog(prev => [...prev, `❌ ERRORE CRITICO: ${errorMessage}`]);
+            } finally {
+                setIsGenerating(false);
+                setIsConfirming(false); // Reset to initial state
+            }
         }, 500);
-    };
+    }, [
+        activeTab,
+        targetDate,
+        requirements,
+        staffList,
+        scheduledShifts,
+        getShiftDefinitionByCode,
+        onGenerateSchedule,
+        shiftDefinitions,
+    ]);
+
+    const selectedPresetIsDefault = useMemo(() => {
+        const selected = presets.find(p => p.id === selectedPresetId);
+        return selected ? selected.id.startsWith('preset-') : true;
+    }, [selectedPresetId, presets]);
 
 
     return (
         <div className="space-y-8">
-            <h2 className="text-3xl font-bold text-gray-800 border-b pb-4">Pianificazione Automatica Turni ({tabTitleMap[activeTab]})</h2>
-
-            {activeTab === 'nurses' && (
-                <div className="bg-white p-6 rounded-lg shadow-md">
-                    <h3 className="text-xl font-bold text-gray-700 mb-4">1. Gestione dei Team Infermieristici</h3>
-                    <div className="flex space-x-2 mb-4 border-b">
-                        {Object.keys(teams).map(teamName => (
-                            <button key={teamName} onClick={() => setSelectedTeam(teamName as TeamName)}
-                                className={`px-4 py-2 text-sm font-semibold rounded-t-md ${selectedTeam === teamName ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-                                {teamName}
-                            </button>
-                        ))}
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-60 overflow-y-auto pr-2">
-                        {staffList.map(staff => (
-                            <div key={staff.id} className="flex items-center p-2 bg-gray-50 rounded-md">
-                                <input type="checkbox" id={`staff-${staff.id}`} checked={teams[selectedTeam].includes(staff.id)}
-                                    onChange={() => handleTeamChange(staff.id, selectedTeam)}
-                                    className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
-                                <label htmlFor={`staff-${staff.id}`} className="ml-3 text-sm font-medium text-gray-800">{staff.name}</label>
-                            </div>
-                        ))}
-                    </div>
-                </div>
+            {isAddShiftModalOpen && (
+                <AddShiftModal
+                    isOpen={isAddShiftModalOpen}
+                    onClose={() => setIsAddShiftModalOpen(false)}
+                    onAddShift={handleAddShift}
+                    existingShiftCodes={shiftDefinitions.map(s => s.code)}
+                />
+            )}
+            {editingShift && (
+                <EditShiftModal
+                    isOpen={!!editingShift}
+                    shift={editingShift}
+                    onClose={() => setEditingShift(null)}
+                    onSave={handleSaveShift}
+                    onDelete={handleDeleteShift}
+                    isDefaultShift={initialShiftCodes.has(editingShift.code)}
+                />
             )}
 
+            <h2 className="text-3xl font-bold text-gray-800 border-b pb-4">Pianificazione Automatica Turni ({tabTitleMap[activeTab]})</h2>
+
             <div className="bg-white p-6 rounded-lg shadow-md">
-                 <h3 className="text-xl font-bold text-gray-700 mb-4">{activeTab === 'nurses' ? '2.' : '1.'} Definizione Fabbisogno Settimanale</h3>
+                 <h3 className="text-xl font-bold text-gray-700 mb-4">1. Definizione Fabbisogno Settimanale</h3>
                  <div className="flex flex-wrap items-center gap-3 mb-4 pb-4 border-b">
                     <div className="flex items-center gap-2">
                         <label htmlFor="preset-select" className="font-medium text-gray-700 whitespace-nowrap">Carica Template:</label>
@@ -407,9 +470,44 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                         </select>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
-                        <button onClick={handleSaveAsPreset} className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-md shadow-sm hover:bg-green-700 transition-colors focus:outline-none focus:ring-2 focus:ring-green-500">Salva Come Nuovo...</button>
-                        <button onClick={handleDeletePreset} className="px-3 py-1.5 text-sm bg-red-100 text-red-700 rounded-md hover:bg-red-200 transition-colors focus:outline-none focus:ring-2 focus:ring-red-400">Elimina</button>
-                        <button onClick={handleResetRequirements} title="Azzera tutti i valori della tabella" className="px-3 py-1.5 text-sm bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400">Azzera Tabella</button>
+                        {!isSavingPreset ? (
+                            <button onClick={() => {setIsSavingPreset(true); setIsConfirmingDelete(false);}} className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-md shadow-sm hover:bg-green-700 transition-colors focus:outline-none focus:ring-2 focus:ring-green-500">Salva Come Nuovo...</button>
+                        ) : (
+                            <div className="flex items-center gap-2 p-2 bg-green-50 border border-green-200 rounded-md">
+                                <input
+                                    type="text"
+                                    value={newPresetName}
+                                    onChange={(e) => setNewPresetName(e.target.value)}
+                                    placeholder="Nome del template..."
+                                    className="px-3 py-1.5 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                    aria-label="Nome del nuovo template"
+                                    autoFocus
+                                />
+                                <button onClick={handleConfirmSavePreset} className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-md shadow-sm hover:bg-green-700">Salva</button>
+                                <button onClick={() => { setIsSavingPreset(false); setNewPresetName(''); }} className="px-3 py-1.5 text-sm bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Annulla</button>
+                            </div>
+                        )}
+                        
+                        {!isConfirmingDelete ? (
+                            <button 
+                                onClick={handleDeletePreset} 
+                                disabled={isSavingPreset || selectedPresetIsDefault} 
+                                className="px-3 py-1.5 text-sm bg-red-100 text-red-700 rounded-md hover:bg-red-200 transition-colors focus:outline-none focus:ring-2 focus:ring-red-400 disabled:bg-gray-200 disabled:text-gray-500 disabled:cursor-not-allowed"
+                            >
+                                Elimina
+                            </button>
+                        ) : (
+                             <div className="flex items-center gap-2 p-1 bg-red-50 border border-red-200 rounded-md">
+                                <button onClick={confirmDeletePreset} className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-md shadow-sm hover:bg-red-700">
+                                    Conferma
+                                </button>
+                                <button onClick={cancelDeletePreset} className="px-3 py-1.5 text-sm bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">
+                                    Annulla
+                                </button>
+                            </div>
+                        )}
+
+                        <button onClick={handleResetRequirements} disabled={isSavingPreset} title="Azzera tutti i valori della tabella" className="px-3 py-1.5 text-sm bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400 disabled:bg-gray-200 disabled:text-gray-500">Azzera Tabella</button>
                     </div>
                 </div>
                  <div className="overflow-x-auto max-h-[50vh]">
@@ -420,10 +518,21 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                                 {weekDays.map(day => <th key={day} className="w-20 px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">{day}</th>)}
                             </tr>
                         </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
+                        <tbody className="bg-white">
                             {relevantShifts.map(shift => (
-                                <tr key={shift.code}>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900 sticky left-0 bg-white" title={shift.description}>{shift.code.replace('_doc','')}</td>
+                                <tr key={shift.code} className="border-t border-gray-200 first:border-t-0">
+                                    <td className="px-2 py-1 whitespace-nowrap text-sm sticky left-0 bg-white group" title={shift.description}>
+                                        <button 
+                                            onClick={() => handleEditShiftClick(shift)}
+                                            className="text-left w-full h-full flex items-center justify-between hover:bg-gray-100 p-2 -m-2 rounded-md transition-colors"
+                                            aria-label={`Gestisci turno ${shift.code}`}
+                                        >
+                                            <span className="font-medium text-gray-900">{shift.code.replace('_doc','')}</span>
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                                <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.5L16.732 3.732z" />
+                                            </svg>
+                                        </button>
+                                    </td>
                                     {weekDays.map((_, dayIndex) => (
                                         <td key={dayIndex} className="px-2 py-1">
                                             <input type="number" min="0" value={requirements[shift.code]?.[dayIndex] ?? 0}
@@ -437,38 +546,62 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                         </tbody>
                     </table>
                  </div>
+                 <div className="mt-4 pt-4 border-t">
+                    <button 
+                        onClick={() => setIsAddShiftModalOpen(true)}
+                        className="flex items-center px-4 py-2 text-sm bg-indigo-100 text-indigo-700 rounded-md hover:bg-indigo-200 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3m0 3h.01M9 17h6m-6-4h6m-6-4h6M3 7h18M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
+                        </svg>
+                        Aggiungi Nuovo Turno
+                    </button>
+                </div>
             </div>
             
             <div className="bg-white p-6 rounded-lg shadow-md">
-                 <h3 className="text-xl font-bold text-gray-700 mb-4">{activeTab === 'nurses' ? '3.' : '2.'} Genera Calendario</h3>
-                 <div className="flex items-center space-x-4">
-                     <label htmlFor="month-picker" className="font-medium text-gray-700">Mese:</label>
-                     <input type="month" id="month-picker" value={targetDate} onChange={e => setTargetDate(e.target.value)}
-                            className="p-2 border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500" />
-                    <button onClick={handleGenerate} disabled={isGenerating}
-                            className="px-6 py-3 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center">
-                        {isGenerating && <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>}
-                        {isGenerating ? 'Generazione...' : 'Genera Turni'}
-                    </button>
-                 </div>
+                 <h3 className="text-xl font-bold text-gray-700 mb-4">2. Genera Calendario</h3>
+                 <div className="flex flex-col sm:flex-row items-start gap-4">
+                    <div className="flex items-center space-x-4">
+                        <label htmlFor="month-picker" className="font-medium text-gray-700">Mese:</label>
+                        <input type="month" id="month-picker" value={targetDate} onChange={e => { setTargetDate(e.target.value); setIsConfirming(false); }}
+                                className="p-2 border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500" />
+                    </div>
 
-                 {generationLog.length > 0 && (
-                     <div className="mt-6 p-4 bg-gray-900 text-white rounded-lg font-mono text-sm max-h-60 overflow-y-auto">
-                        <h4 className="font-bold mb-2">Report di Generazione:</h4>
-                        <ul>
-                          {generationLog.map((line, index) => {
-                              const color = line.startsWith('❌') ? 'text-red-400' : line.startsWith('⚠️') ? 'text-yellow-400' : line.startsWith('💡') ? 'text-cyan-400' : 'text-gray-300';
-                              const iconMatch = line.match(/^[❌⚠️💡ℹ️✅]/u);
-                              const icon = iconMatch ? iconMatch[0] : '✅';
-                              const message = iconMatch ? line.substring(icon.length).trim() : line;
-                              return <li key={index} className={`${color}`}><span className="mr-2">{icon}</span>{message}</li>
-                          })}
-                        </ul>
-                     </div>
-                 )}
+                    <div className="flex items-center space-x-3">
+                        {!isConfirming ? (
+                            <button onClick={() => setIsConfirming(true)} disabled={isGenerating}
+                                    className="px-6 py-3 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition-transform transform hover:scale-105 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:transform-none flex items-center">
+                                Genera Turni
+                            </button>
+                        ) : (
+                            <>
+                                <button onClick={handleGenerate} disabled={isGenerating}
+                                        className="px-6 py-3 bg-red-600 text-white font-bold rounded-lg shadow-md hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center">
+                                    {isGenerating && <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>}
+                                    {isGenerating ? 'Generazione...' : 'Conferma Sovrascrittura'}
+                                </button>
+                                <button onClick={() => setIsConfirming(false)} disabled={isGenerating}
+                                        className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition-colors">
+                                    Annulla
+                                </button>
+                            </>
+                        )}
+                    </div>
+                </div>
+
+                {(isGenerating || generationLog.length > 0) && (
+                    <div className="mt-6">
+                        <h4 className="text-lg font-semibold text-gray-700 mb-2">Log di Generazione:</h4>
+                        <pre className="bg-gray-900 text-white text-sm font-mono p-4 rounded-lg shadow-inner max-h-60 overflow-y-auto">
+                            {generationLog.join('\n')}
+                            {isGenerating && <span className="animate-pulse">...</span>}
+                        </pre>
+                    </div>
+                )}
             </div>
         </div>
     );

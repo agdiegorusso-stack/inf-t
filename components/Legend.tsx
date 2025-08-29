@@ -1,12 +1,14 @@
 
+
 import React, { useMemo } from 'react';
-import { SHIFT_DEFINITIONS, LONG_SHIFTS } from '../constants';
+import { LONG_SHIFTS } from '../constants';
 import { ShiftTime, StaffRole, ShiftDefinition } from '../types';
 import type { ActiveTab } from '../App';
 
 
 interface LegendProps {
     activeTab: ActiveTab;
+    shiftDefinitions: ShiftDefinition[];
 }
 
 const LegendSection: React.FC<{title: string, shifts: ShiftDefinition[]}> = ({ title, shifts }) => {
@@ -35,10 +37,10 @@ const LegendSection: React.FC<{title: string, shifts: ShiftDefinition[]}> = ({ t
 };
 
 
-export const Legend: React.FC<LegendProps> = ({ activeTab }) => {
+export const Legend: React.FC<LegendProps> = ({ activeTab, shiftDefinitions }) => {
 
     const relevantShifts = useMemo(() => {
-        return SHIFT_DEFINITIONS.filter(shift => {
+        return shiftDefinitions.filter(shift => {
             if (shift.code === 'UNCOVERED') return false; // Handled separately
             switch(activeTab) {
                 case 'nurses':
@@ -51,7 +53,7 @@ export const Legend: React.FC<LegendProps> = ({ activeTab }) => {
                     return false;
             }
         });
-    }, [activeTab]);
+    }, [activeTab, shiftDefinitions]);
 
     const workShifts = relevantShifts.filter(s => 
         s.time !== ShiftTime.Absence && 
@@ -62,7 +64,7 @@ export const Legend: React.FC<LegendProps> = ({ activeTab }) => {
 
     const longShifts = relevantShifts.filter(s => LONG_SHIFTS.includes(s.code));
     
-    const absenceShifts = SHIFT_DEFINITIONS.filter(s => s.time === ShiftTime.Absence || s.time === ShiftTime.Rest);
+    const absenceShifts = shiftDefinitions.filter(s => s.time === ShiftTime.Absence || s.time === ShiftTime.Rest);
     
     return (
         <div className="bg-white p-4 rounded-lg shadow-md h-full">

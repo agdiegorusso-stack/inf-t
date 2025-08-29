@@ -1,6 +1,7 @@
 
 import React from 'react';
 import type { ScheduledShift, Staff } from '../types';
+import { StaffRole } from '../types';
 
 interface FilterControlsProps {
     currentDate: Date;
@@ -8,9 +9,11 @@ interface FilterControlsProps {
     onAddAbsenceClick: () => void;
     scheduledShifts: ScheduledShift[];
     staff: Staff[];
+    currentUser: Staff;
+    onManagePersonnelClick: () => void;
 }
 
-export const FilterControls: React.FC<FilterControlsProps> = ({ currentDate, onDateChange, onAddAbsenceClick, scheduledShifts, staff }) => {
+export const FilterControls: React.FC<FilterControlsProps> = ({ currentDate, onDateChange, onAddAbsenceClick, scheduledShifts, staff, currentUser, onManagePersonnelClick }) => {
     
     const changeMonth = (offset: number) => {
         const newDate = new Date(currentDate);
@@ -66,6 +69,16 @@ export const FilterControls: React.FC<FilterControlsProps> = ({ currentDate, onD
                 </button>
             </div>
             <div className="flex items-center space-x-2 sm:space-x-4">
+                 {currentUser.role === StaffRole.HeadNurse && (
+                    <button 
+                        onClick={onManagePersonnelClick}
+                        className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg shadow-sm hover:bg-purple-700 transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M15 21v-1a6 6 0 00-5.176-5.97M15 21h3.75a2.25 2.25 0 002.25-2.25V18a2.25 2.25 0 00-2.25-2.25H15m-1.47-5.558a3 3 0 014.94 0 3 3 0 014.94 0 3 3 0 01-5.834 1.994M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        Gestisci Personale
+                    </button>
+                 )}
                 <button 
                     onClick={onAddAbsenceClick}
                     className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-lg shadow-sm hover:bg-yellow-600 transition-colors focus:outline-none focus:ring-2 focus:ring-yellow-400">

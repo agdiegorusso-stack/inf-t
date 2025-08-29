@@ -3,8 +3,8 @@ import type { ActiveTab } from './App';
 export enum StaffRole {
     Nurse = 'Infermiere',
     OSS = 'OSS',
-    Doctor = 'Medico',
-    HeadNurse = 'Caposala'
+    HeadNurse = 'Caposala',
+    Doctor = 'Medico'
 }
 
 export enum ContractType {
@@ -46,12 +46,18 @@ export interface Staff {
     role: StaffRole;
     contract: ContractType;
     usualLocations: Location[];
+    phone?: string;
+    email?: string;
     /** 
      * @deprecated In a real application, passwords should NEVER be stored in plaintext on the client.
      * This field is used for the initial constants, but a logged-in user object returned from a backend
      * should NOT include the password.
      */
     password?: string;
+    // New fields for personnel management
+    hasLaw104?: boolean;
+    specialRules?: string;
+    unavailableShiftCodes?: string[];
 }
 
 export interface ShiftDefinition {

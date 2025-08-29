@@ -1,16 +1,23 @@
 
 import { ContractType, ShiftTime, ShiftDefinition, StaffRole, Staff } from '../types';
-import { SHIFT_DEFINITIONS, LONG_SHIFTS } from '../constants';
+import { LONG_SHIFTS } from '../constants';
 
 /**
- * Checks if a specific shift is allowed for a given staff member based on role and contract.
+ * Checks if a specific shift is allowed for a given staff member based on role, contract, and individual preferences.
  * @param shiftCode The code of the shift to check (e.g., 'M', 'P', 'N').
- * @param contract The contract type of the staff member.
- * @param role The role of the staff member.
+ * @param staff The staff member object.
+ * @param shiftDefinitions The complete list of available shift definitions.
  * @returns `true` if the shift is allowed, `false` otherwise.
  */
-export const isShiftAllowed = (shiftCode: string, contract: ContractType, role: StaffRole): boolean => {
-    const shiftDef = SHIFT_DEFINITIONS.find(s => s.code === shiftCode);
+export const isShiftAllowed = (shiftCode: string, staff: Staff, shiftDefinitions: ShiftDefinition[]): boolean => {
+    const { contract, role, unavailableShiftCodes } = staff;
+    
+    // Rule 1: Check individual unavailability preferences
+    if (unavailableShiftCodes?.includes(shiftCode)) {
+        return false;
+    }
+
+    const shiftDef = shiftDefinitions.find(s => s.code === shiftCode);
     if (!shiftDef) return true; // Allow empty/unassigned by default
 
     // Absences and rests are always allowed for anyone that is part of any role group
@@ -55,12 +62,13 @@ export const isShiftAllowed = (shiftCode: string, contract: ContractType, role: 
 /**
  * Gets a list of all shift definitions that are permissible for a given staff member.
  * @param staff The staff member object, containing contract and role.
+ * @param shiftDefinitions The complete list of available shift definitions.
  * @returns An array of allowed ShiftDefinition objects.
  */
-export const getAllowedShifts = (staff: Staff): ShiftDefinition[] => {
+export const getAllowedShifts = (staff: Staff, shiftDefinitions: ShiftDefinition[]): ShiftDefinition[] => {
     if (staff.id === 'unassigned') return [];
     
-    return SHIFT_DEFINITIONS.filter(def => 
-        def.code !== 'UNCOVERED' && isShiftAllowed(def.code, staff.contract, staff.role)
+    return shiftDefinitions.filter(def => 
+        def.code !== 'UNCOVERED' && isShiftAllowed(def.code, staff, shiftDefinitions)
     );
 };

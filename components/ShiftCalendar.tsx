@@ -2,7 +2,7 @@
 
 import React, { useMemo } from 'react';
 import type { Staff, ScheduledShift, ShiftDefinition } from '../types';
-import { SHIFT_DEFINITIONS, UNASSIGNED_STAFF_ID } from '../constants';
+import { UNASSIGNED_STAFF_ID } from '../constants';
 import { ShiftTime, StaffRole, ContractType } from '../types';
 import { getAllowedShifts } from '../utils/shiftUtils';
 
@@ -10,29 +10,30 @@ interface ShiftCalendarProps {
     currentDate: Date;
     staffList: Staff[];
     scheduledShifts: ScheduledShift[];
+    shiftDefinitions: ShiftDefinition[];
     onUncoveredShiftClick: (shift: ScheduledShift) => void;
     currentUser: Staff;
     onUpdateShift: (staffId: string, date: string, newShiftCode: string) => void;
-    onStaffClick: (staff: Staff) => void;
 }
 
 interface ShiftCellProps {
     shift: ScheduledShift | undefined;
     staff: Staff;
     date: string;
+    shiftDefinitions: ShiftDefinition[];
     currentUser: Staff;
     onUncoveredShiftClick: (shift: ScheduledShift) => void;
     onUpdateShift: (staffId: string, date: string, newShiftCode: string) => void;
 }
 
-const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, currentUser, onUncoveredShiftClick, onUpdateShift }) => {
+const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, shiftDefinitions, currentUser, onUncoveredShiftClick, onUpdateShift }) => {
     const isHeadNurse = currentUser.role === StaffRole.HeadNurse;
     const isUnassignedShift = shift?.staffId === UNASSIGNED_STAFF_ID;
 
     // Special rendering for uncovered shifts in the "Turni Scoperti" row, which is a unique UI element
     if (isUnassignedShift && shift) {
         const canManage = isHeadNurse;
-        const shiftDef = SHIFT_DEFINITIONS.find(def => def.code === shift.shiftCode);
+        const shiftDef = shiftDefinitions.find(def => def.code === shift.shiftCode);
         const description = shiftDef ? `${shiftDef.description}` : "Turno Scoperto";
 
         return (
@@ -41,7 +42,7 @@ const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, currentUser, 
                 className={`relative w-full h-full flex items-center justify-center text-xs font-bold rounded-sm bg-red-600 text-white animate-pulse ${canManage ? 'cursor-pointer' : 'cursor-default'}`} 
                 title={canManage ? `${description} - Clicca per trovare un sostituto.` : description}
             >
-                <span>{shift.shiftCode}</span>
+                <span>{shift.shiftCode?.replace('_doc', '')}</span>
                 {canManage && (
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 absolute top-0.5 right-0.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -56,8 +57,8 @@ const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, currentUser, 
     
     const shiftDef = useMemo(() => {
         if (!shift || !shift.shiftCode || isCombinedShift) return null;
-        return SHIFT_DEFINITIONS.find(def => def.code === shift.shiftCode);
-    }, [shift, isCombinedShift]);
+        return shiftDefinitions.find(def => def.code === shift.shiftCode);
+    }, [shift, isCombinedShift, shiftDefinitions]);
     
     let cellBg = 'bg-gray-50';
     let cellTextColor = 'text-gray-800';
@@ -67,8 +68,8 @@ const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, currentUser, 
         cellBg = 'bg-purple-300';
         cellTextColor = 'text-purple-900';
         const [code1, code2] = shift.shiftCode!.split('/');
-        const def1 = SHIFT_DEFINITIONS.find(d => d.code === code1);
-        const def2 = SHIFT_DEFINITIONS.find(d => d.code === code2);
+        const def1 = shiftDefinitions.find(d => d.code === code1);
+        const def2 = shiftDefinitions.find(d => d.code === code2);
         cellDescription = (def1 && def2) ? `${def1.description} + ${def2.description}` : 'Turno combinato';
     } else if (shiftDef) {
         cellBg = shiftDef.color.startsWith('#') ? '' : shiftDef.color; // Handle hex colors
@@ -84,7 +85,7 @@ const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, currentUser, 
 
     // Head Nurse: Editable dropdown for everyone
     if (isHeadNurse) {
-        const allowedShifts = getAllowedShifts(staff);
+        const allowedShifts = getAllowedShifts(staff, shiftDefinitions);
         const selectClasses = `w-full h-full text-xs font-bold rounded-sm cursor-pointer appearance-none text-center border-none focus:ring-2 focus:ring-indigo-500 ${cellBg} ${cellTextColor}`;
         
         return (
@@ -99,7 +100,7 @@ const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, currentUser, 
                 {isCombinedShift && <option value={shift.shiftCode}>{shift.shiftCode}</option>}
                 <option value="">--</option>
                 {allowedShifts.map(def => (
-                    <option key={def.code} value={def.code}>{def.code}</option>
+                    <option key={def.code} value={def.code}>{def.code.replace('_doc', '')}</option>
                 ))}
             </select>
         );
@@ -113,13 +114,13 @@ const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, currentUser, 
     const cellClasses = `w-full h-full flex items-center justify-center text-xs font-bold rounded-sm ${cellBg} ${cellTextColor}`;
     return (
          <div className={cellClasses} style={style} title={cellDescription}>
-            {shift.shiftCode}
+            {shift.shiftCode.replace('_doc', '')}
         </div>
     );
 };
 
 
-export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staffList, scheduledShifts, onUncoveredShiftClick, currentUser, onUpdateShift, onStaffClick }) => {
+export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staffList, scheduledShifts, shiftDefinitions, onUncoveredShiftClick, currentUser, onUpdateShift }) => {
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -157,7 +158,6 @@ export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staff
     }, [staffList]);
     
     const unassignedStaff = staffList.find(s => s.id === UNASSIGNED_STAFF_ID);
-    const isHeadNurse = currentUser.role === StaffRole.HeadNurse;
 
     return (
         <div className="bg-white p-4 rounded-lg shadow-md overflow-x-auto">
@@ -179,9 +179,8 @@ export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staff
                     {sortedStaff.map(staff => (
                         <React.Fragment key={staff.id}>
                             <div 
-                                className={`sticky left-0 bg-white z-10 p-2 text-sm font-medium text-gray-800 border-t border-gray-200 flex items-center truncate ${isHeadNurse ? 'cursor-pointer hover:bg-gray-100' : ''}`}
-                                title={isHeadNurse ? `Modifica dati per ${staff.name}` : staff.name}
-                                onClick={() => isHeadNurse && onStaffClick(staff)}
+                                className="sticky left-0 bg-white z-10 p-2 text-sm font-medium text-gray-800 border-t border-gray-200 flex items-center truncate"
+                                title={staff.name}
                             >
                                 {staff.name}
                             </div>
@@ -195,6 +194,7 @@ export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staff
                                             shift={shift}
                                             staff={staff}
                                             date={dateStr}
+                                            shiftDefinitions={shiftDefinitions}
                                             currentUser={currentUser}
                                             onUncoveredShiftClick={onUncoveredShiftClick}
                                             onUpdateShift={onUpdateShift}
@@ -224,6 +224,7 @@ export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staff
                                                     shift={shift}
                                                     staff={unassignedStaff}
                                                     date={dateStr}
+                                                    shiftDefinitions={shiftDefinitions}
                                                     currentUser={currentUser}
                                                     onUncoveredShiftClick={onUncoveredShiftClick}
                                                     onUpdateShift={onUpdateShift}

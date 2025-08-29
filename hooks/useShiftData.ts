@@ -1,6 +1,6 @@
 
 import { useState, useCallback, useMemo } from 'react';
-import { STAFF_LIST, SHIFT_DEFINITIONS, UNASSIGNED_STAFF_ID } from '../constants';
+import { STAFF_LIST, SHIFT_DEFINITIONS as INITIAL_SHIFT_DEFINITIONS, UNASSIGNED_STAFF_ID } from '../constants';
 import type { Staff, ScheduledShift, Absence, ShiftDefinition, ReplacementOption, ContractType, StaffRole } from '../types';
 import { ShiftTime, ContractType as ContractEnum, StaffRole as RoleEnum } from '../types';
 import { isShiftAllowed } from '../utils/shiftUtils';
@@ -17,17 +17,19 @@ const generateInitialSchedule = (): ScheduledShift[] => {
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const restShifts = ['RS', 'S', 'R'];
 
+    const allShiftDefinitions = [...INITIAL_SHIFT_DEFINITIONS]; // In this initial generation, we only use the base shifts
+
     STAFF_LIST.forEach(staff => {
         // Don't generate shifts for the unassigned placeholder
         if (staff.id === UNASSIGNED_STAFF_ID) return;
 
-        // Get a list of working shifts that are ALLOWED for this specific staff member's role and contract
-        const allowedWorkingShifts = SHIFT_DEFINITIONS
+        // Get a list of working shifts that are ALLOWED for this specific staff member
+        const allowedWorkingShifts = allShiftDefinitions
             .filter(def => 
                 def.time !== ShiftTime.Absence && 
                 def.time !== ShiftTime.Rest && 
                 def.time !== ShiftTime.OffShift &&
-                isShiftAllowed(def.code, staff.contract, staff.role)
+                isShiftAllowed(def.code, staff, allShiftDefinitions)
             )
             .map(def => def.code);
 
@@ -67,13 +69,39 @@ const generateInitialSchedule = (): ScheduledShift[] => {
 
 
 export const useShiftData = () => {
-    const [staff, setStaff] = useState<Staff[]>(STAFF_LIST);
+    const [staff, setStaff] = useState<Staff[]>(() => {
+        try {
+            const storedStaff = localStorage.getItem('staffListStorage');
+            if (storedStaff) {
+                return JSON.parse(storedStaff);
+            }
+        } catch (e) {
+            console.error("Failed to load staff list from localStorage", e);
+        }
+        // Fallback to initial list and save it
+        localStorage.setItem('staffListStorage', JSON.stringify(STAFF_LIST));
+        return STAFF_LIST;
+    });
     const [scheduledShifts, setScheduledShifts] = useState<ScheduledShift[]>(generateInitialSchedule());
     const [absences, setAbsences] = useState<Absence[]>([]);
 
+    const [shiftDefinitions, setShiftDefinitions] = useState<ShiftDefinition[]>(() => {
+        try {
+            const userShiftsData = localStorage.getItem('userShiftDefinitions');
+            const userShifts = userShiftsData ? JSON.parse(userShiftsData) : [];
+            const combinedShifts = [...INITIAL_SHIFT_DEFINITIONS, ...userShifts];
+            // Remove duplicates by code, user-defined shifts override initial ones
+            const uniqueShifts = Array.from(new Map(combinedShifts.map(s => [s.code, s])).values());
+            return uniqueShifts;
+        } catch (e) {
+            console.error("Failed to load shift definitions from localStorage", e);
+            return INITIAL_SHIFT_DEFINITIONS;
+        }
+    });
+
     const shiftDefMap = useMemo(() => {
-        return new Map(SHIFT_DEFINITIONS.map(def => [def.code, def]));
-    }, []);
+        return new Map(shiftDefinitions.map(def => [def.code, def]));
+    }, [shiftDefinitions]);
 
     const staffMap = useMemo(() => {
         return new Map(staff.map(s => [s.id, s]));
@@ -81,6 +109,70 @@ export const useShiftData = () => {
 
     const getStaffById = useCallback((id: string) => staffMap.get(id), [staffMap]);
     const getShiftDefinitionByCode = useCallback((code: string) => shiftDefMap.get(code), [shiftDefMap]);
+
+    const addShiftDefinition = useCallback((newShift: ShiftDefinition) => {
+        setShiftDefinitions(prev => {
+            const updated = [...prev, newShift];
+            // Update localStorage with user-defined shifts only
+            const userShifts = updated.filter(s => !INITIAL_SHIFT_DEFINITIONS.some(is => is.code === s.code));
+            try {
+                localStorage.setItem('userShiftDefinitions', JSON.stringify(userShifts));
+            } catch (e) {
+                console.error("Failed to save new shift definition to localStorage", e);
+            }
+            return updated;
+        });
+    }, []);
+
+    const deleteShiftDefinition = useCallback((code: string) => {
+        // Check if it's a default shift
+        if (INITIAL_SHIFT_DEFINITIONS.some(s => s.code === code)) {
+            alert("I turni di default non possono essere eliminati.");
+            return;
+        }
+
+        // Check if the shift is currently in use (including combined shifts)
+        if (scheduledShifts.some(s => s.shiftCode?.split('/').includes(code))) {
+            alert("Impossibile eliminare il turno perché è attualmente assegnato nel calendario. Rimuovere tutte le assegnazioni prima di procedere.");
+            return;
+        }
+
+        setShiftDefinitions(prev => {
+            const updated = prev.filter(s => s.code !== code);
+            
+            // Update localStorage with user-defined shifts only
+            const userShifts = updated.filter(s => !INITIAL_SHIFT_DEFINITIONS.some(is => is.code === s.code));
+            try {
+                localStorage.setItem('userShiftDefinitions', JSON.stringify(userShifts));
+            } catch (e) {
+                console.error("Failed to update shift definitions in localStorage after deletion", e);
+            }
+            return updated;
+        });
+    }, [scheduledShifts]);
+
+    const updateShiftDefinition = useCallback((originalCode: string, updatedShift: ShiftDefinition) => {
+        // This check is a safeguard. UI should prevent this.
+        if (INITIAL_SHIFT_DEFINITIONS.some(s => s.code === originalCode)) {
+            alert("I turni di default non possono essere modificati.");
+            return;
+        }
+    
+        // Code cannot be changed, so we can find by originalCode and replace.
+        setShiftDefinitions(prev => {
+            const updated = prev.map(s => s.code === originalCode ? updatedShift : s);
+            
+            // Persist only user-defined shifts to localStorage.
+            const userShifts = updated.filter(s => !INITIAL_SHIFT_DEFINITIONS.some(is => is.code === s.code));
+            try {
+                localStorage.setItem('userShiftDefinitions', JSON.stringify(userShifts));
+            } catch (e) {
+                console.error("Failed to update shift definitions in localStorage", e);
+            }
+            return updated;
+        });
+    }, []);
+
 
     const addAbsence = useCallback((staffId: string, reason: string, startDate: Date, endDate: Date) => {
         setAbsences(prev => [...prev, {
@@ -171,7 +263,7 @@ export const useShiftData = () => {
                         if (s.role !== RoleEnum.OSS) return false;
                         break;
                     case RoleEnum.Doctor:
-                        // A Doctor can only be replaced by another Doctor
+                         // A Doctor can only be replaced by another Doctor
                         if (s.role !== RoleEnum.Doctor) return false;
                         break;
                     default:
@@ -227,7 +319,6 @@ export const useShiftData = () => {
             .sort((a, b) => b.priority - a.priority);
 
         return replacements;
-    // FIX: Corrected a typo in the dependency array from `getById` to the correctly named `getStaffById` function.
     }, [staff, scheduledShifts, getShiftDefinitionByCode, getStaffById]);
     
     const assignShift = useCallback((shiftId: string, newStaffId: string) => {
@@ -389,17 +480,56 @@ export const useShiftData = () => {
         });
     }, []);
 
-    const updateStaffMember = useCallback((staffId: string, newContract: ContractType, newRole: StaffRole) => {
-        setStaff(prevStaff =>
-            prevStaff.map(s =>
-                s.id === staffId ? { ...s, contract: newContract, role: newRole } : s
-            )
-        );
+    const updateStaffMember = useCallback((staffId: string, updates: Partial<Omit<Staff, 'id' | 'name'>>) => {
+        setStaff(prevStaff => {
+            const updatedStaff = prevStaff.map(s =>
+                s.id === staffId ? { ...s, ...updates } : s
+            );
+            try {
+                localStorage.setItem('staffListStorage', JSON.stringify(updatedStaff));
+            } catch (e) {
+                 console.error("Failed to save updated staff list to localStorage", e);
+            }
+            return updatedStaff;
+        });
+    }, []);
+
+    const changePassword = useCallback(async (staffId: string, oldPassword: string, newPassword: string): Promise<void> => {
+        return new Promise((resolve, reject) => {
+            setStaff(prevStaff => {
+                const userIndex = prevStaff.findIndex(s => s.id === staffId);
+                if (userIndex === -1) {
+                    reject(new Error("Utente non trovato."));
+                    return prevStaff;
+                }
+    
+                const user = prevStaff[userIndex];
+                if (user.password !== oldPassword) {
+                    reject(new Error("La vecchia password non è corretta."));
+                    return prevStaff;
+                }
+    
+                const updatedUser = { ...user, password: newPassword };
+                const updatedStaff = [...prevStaff];
+                updatedStaff[userIndex] = updatedUser;
+    
+                try {
+                    localStorage.setItem('staffListStorage', JSON.stringify(updatedStaff));
+                    resolve();
+                    return updatedStaff;
+                } catch (e) {
+                    console.error("Failed to save updated staff list to localStorage", e);
+                    reject(new Error("Impossibile salvare la nuova password."));
+                    return prevStaff;
+                }
+            });
+        });
     }, []);
 
     return { 
         staff, 
         scheduledShifts, 
+        shiftDefinitions,
         addAbsence, 
         findReplacements, 
         assignShift, 
@@ -407,6 +537,10 @@ export const useShiftData = () => {
         getShiftDefinitionByCode,
         updateShift,
         overwriteSchedule,
-        updateStaffMember
+        updateStaffMember,
+        addShiftDefinition,
+        deleteShiftDefinition,
+        updateShiftDefinition,
+        changePassword,
     };
 };

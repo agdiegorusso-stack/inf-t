@@ -47,28 +47,10 @@ standardOSSRequirements['PT'] = [0, 1, 1, 1, 1, 1, 0];
 
 // --- TEMPLATE MEDICI ---
 const standardDoctorRequirements: ShiftRequirements = {};
-// [Sun, Mon, Tue, Wed, Thu, Fri, Sat]
-standardDoctorRequirements['Md_doc'] =  [0, 1, 1, 1, 1, 1, 1]; // M-Sa
-standardDoctorRequirements['Pd_doc'] =  [0, 1, 0, 1, 0, 1, 0]; // Lu, Me, Ve
-standardDoctorRequirements['Mu_doc'] =  [0, 1, 1, 1, 1, 1, 1]; // M-Sa
-standardDoctorRequirements['Pu_doc'] =  [0, 1, 1, 1, 1, 1, 1]; // M-Sa
-standardDoctorRequirements['Mh_doc'] =  [0, 1, 1, 1, 1, 1, 0]; // M-F
-standardDoctorRequirements['Sd_doc'] =  [0, 1, 0, 1, 0, 1, 0]; // Lu, Me, Ve
-standardDoctorRequirements['Mac_doc'] = [0, 1, 1, 0, 1, 1, 0]; // Lu, Ma, Gi, Ve
-standardDoctorRequirements['Ab_doc'] =  [0, 0, 1, 0, 0, 0, 0]; // Ma
-standardDoctorRequirements['Ac_doc'] =  [0, 0, 0, 0, 1, 0, 0]; // Gi
-standardDoctorRequirements['Msc_doc'] = [0, 0, 0, 0, 0, 0, 1]; // Sa
-standardDoctorRequirements['Mr_doc'] =  [0, 0, 0, 0, 0, 1, 0]; // Ve
-standardDoctorRequirements['Mn_doc'] =  [2, 2, 2, 2, 2, 2, 2]; // Tutti i giorni (2 medici)
-standardDoctorRequirements['Pn_doc'] =  [1, 1, 1, 1, 1, 1, 1]; // Tutti i giorni
-standardDoctorRequirements['Cm_doc'] =  [0, 1, 1, 1, 1, 1, 1]; // M-Sa
-standardDoctorRequirements['Cp_doc'] =  [0, 1, 1, 1, 1, 1, 1]; // M-Sa
-standardDoctorRequirements['N_doc'] =   [1, 1, 1, 1, 1, 1, 1]; // Tutti i giorni
-standardDoctorRequirements['Mc_doc'] =  [0, 1, 1, 1, 1, 1, 1]; // M-Sa
-standardDoctorRequirements['Pc_doc'] =  [0, 1, 1, 1, 1, 1, 1]; // M-Sa
-standardDoctorRequirements['Mv_doc'] =  [0, 0, 1, 1, 0, 0, 0]; // Ma, Me
-standardDoctorRequirements['Mt_doc'] =  [0, 0, 0, 0, 1, 0, 0]; // Gi
-standardDoctorRequirements['Mco_doc'] = [0, 2, 0, 2, 2, 0, 0]; // Lu, Me, Gi (2 medici)
+standardDoctorRequirements['G_doc'] = [1, 1, 1, 1, 1, 1, 1]; // Guardia sempre presente
+standardDoctorRequirements['R_doc'] = [1, 1, 1, 1, 1, 1, 1]; // Reperibilità sempre presente
+standardDoctorRequirements['A_doc'] = [0, 2, 2, 2, 2, 2, 0]; // Ambulatorio durante la settimana
+standardDoctorRequirements['N_doc'] = [1, 1, 1, 1, 1, 1, 1]; // Notte sempre presente
 
 
 export const REQUIREMENT_PRESETS: RequirementPreset[] = [
@@ -77,7 +59,7 @@ export const REQUIREMENT_PRESETS: RequirementPreset[] = [
     { id: 'preset-nurse-standard', name: 'Standard (Infermieri)', requirements: standardNurseRequirements, role: 'nurses' },
     { id: 'preset-nurse-summer', name: 'Estivo (Infermieri)', requirements: summerNurseRequirements, role: 'nurses' },
     
-    { id: 'preset-doctor-standard', name: 'Standard (Medici)', requirements: standardDoctorRequirements, role: 'doctors' },
-
     { id: 'preset-oss-standard', name: 'Standard (OSS)', requirements: standardOSSRequirements, role: 'oss' },
+
+    { id: 'preset-doctor-standard', name: 'Standard (Medici)', requirements: standardDoctorRequirements, role: 'doctors' },
 ];

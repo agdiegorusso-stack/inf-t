@@ -1,3 +1,4 @@
+
 import type { Staff } from '../types';
 import { STAFF_LIST } from '../constants';
 
@@ -33,7 +34,17 @@ export const authenticateUser = async (staffId: string, password: string): Promi
 export const mockAuthenticateUser = (staffId: string, password: string): Promise<Staff> => {
     return new Promise((resolve, reject) => {
         setTimeout(() => {
-            const user = STAFF_LIST.find(s => s.id === staffId);
+            let currentStaffList = STAFF_LIST;
+            try {
+                const storedStaff = localStorage.getItem('staffListStorage');
+                if (storedStaff) {
+                    currentStaffList = JSON.parse(storedStaff);
+                }
+            } catch (e) {
+                console.error("Auth service could not read from localStorage, using defaults.", e);
+            }
+
+            const user = currentStaffList.find(s => s.id === staffId);
             if (user && user.password === password) {
                 const { password, ...userWithoutPassword } = user;
                 resolve(userWithoutPassword);

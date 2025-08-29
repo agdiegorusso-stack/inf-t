@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useCallback } from 'react';
 import { ShiftCalendar } from './components/ShiftCalendar';
 import { Header } from './components/Header';
@@ -5,23 +6,22 @@ import { FilterControls } from './components/FilterControls';
 import { Legend } from './components/Legend';
 import { AbsenceModal } from './components/AbsenceModal';
 import { ReplacementModal } from './components/ReplacementModal';
-import { StaffEditModal } from './components/StaffEditModal';
 import { useShiftData } from './hooks/useShiftData';
-import type { ScheduledShift, Staff, ShiftDefinition } from './types';
+import type { ScheduledShift, Staff } from './types';
 import { ContractType, StaffRole } from './types';
 import { LoginScreen } from './components/LoginScreen';
-import { STAFF_LIST } from './constants';
+import { SHIFT_DEFINITIONS as INITIAL_SHIFT_DEFINITIONS } from './constants';
 import { mockAuthenticateUser } from './services/authService';
 import { ShiftPlanner } from './components/ShiftPlanner';
+import { PersonnelPage } from './components/PersonnelPage';
 
 export type ActiveTab = 'nurses' | 'oss' | 'doctors';
 
 const App: React.FC = () => {
-    // FIX: Removed `shiftDefinitions` and `addShiftDefinition` which were causing errors
-    // as they are not returned by `useShiftData`.
     const { 
         staff, 
         scheduledShifts, 
+        shiftDefinitions,
         addAbsence, 
         findReplacements, 
         assignShift,
@@ -30,6 +30,10 @@ const App: React.FC = () => {
         updateShift,
         overwriteSchedule,
         updateStaffMember,
+        addShiftDefinition,
+        deleteShiftDefinition,
+        updateShiftDefinition,
+        changePassword,
     } = useShiftData();
 
     const [currentUser, setCurrentUser] = useState<Staff | null>(null);
@@ -38,10 +42,8 @@ const App: React.FC = () => {
     const [currentDate, setCurrentDate] = useState(new Date());
     const [isAbsenceModalOpen, setIsAbsenceModalOpen] = useState(false);
     const [isReplacementModalOpen, setIsReplacementModalOpen] = useState(false);
-    const [isStaffEditModalOpen, setIsStaffEditModalOpen] = useState(false);
-    const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
     const [selectedShift, setSelectedShift] = useState<ScheduledShift | null>(null);
-    const [view, setView] = useState<'calendar' | 'planner'>('calendar');
+    const [view, setView] = useState<'calendar' | 'planner' | 'personnel'>('calendar');
     const [activeTab, setActiveTab] = useState<ActiveTab>('nurses');
 
     const handleLogin = useCallback(async (staffId: string, password: string) => {
@@ -79,17 +81,10 @@ const App: React.FC = () => {
         setIsReplacementModalOpen(true);
     }, []);
     
-    const handleOpenStaffEditModal = useCallback((staffMember: Staff) => {
-        setEditingStaff(staffMember);
-        setIsStaffEditModalOpen(true);
-    }, []);
-
     const handleCloseModals = useCallback(() => {
         setIsAbsenceModalOpen(false);
         setIsReplacementModalOpen(false);
-        setIsStaffEditModalOpen(false);
         setSelectedShift(null);
-        setEditingStaff(null);
     }, []);
     
     const handleAddAbsence = useCallback((staffId: string, reason: string, startDate: Date, endDate: Date) => {
@@ -106,18 +101,22 @@ const App: React.FC = () => {
         updateShift(staffId, date, newShiftCode);
     }, [updateShift]);
 
-    const handleUpdateStaff = useCallback((staffId: string, newContract: ContractType, newRole: StaffRole) => {
-        updateStaffMember(staffId, newContract, newRole);
-        handleCloseModals();
-    }, [updateStaffMember, handleCloseModals]);
+    const handleUpdateStaff = useCallback((staffId: string, updates: Partial<Omit<Staff, 'id' | 'name'>>) => {
+        updateStaffMember(staffId, updates);
+    }, [updateStaffMember]);
 
     const handleScheduleOverwrite = useCallback((newShifts: ScheduledShift[], targetMonth: string, affectedStaffIds: string[]) => {
-        if(window.confirm(`Sei sicuro di voler sovrascrivere i turni per il personale selezionato per il mese target? Tutte le modifiche manuali per questo gruppo andranno perse.`)) {
-            overwriteSchedule(newShifts, targetMonth, affectedStaffIds);
-            setView('calendar');
-            alert("Calendario turni generato e aggiornato con successo!");
-        }
-    }, [overwriteSchedule]);
+        // La conferma ora viene gestita nel componente ShiftPlanner prima di chiamare questa funzione.
+        overwriteSchedule(newShifts, targetMonth, affectedStaffIds);
+        
+        // BUG FIX: Naviga al mese appena generato.
+        // Crea un oggetto Date dalla stringa "YYYY-MM". Usare T12:00:00Z evita problemi di fuso orario.
+        const newDate = new Date(`${targetMonth}-01T12:00:00Z`);
+        handleDateChange(newDate);
+
+        setView('calendar');
+        alert("Calendario turni generato e aggiornato con successo!");
+    }, [overwriteSchedule, handleDateChange]);
 
     const replacements = useMemo(() => {
         if (!selectedShift) return [];
@@ -152,7 +151,7 @@ const App: React.FC = () => {
     }, [staff, activeTab]);
 
     if (!currentUser) {
-        return <LoginScreen staffList={STAFF_LIST} onLogin={handleLogin} error={loginError} isLoading={isLoading} />;
+        return <LoginScreen staffList={staff} onLogin={handleLogin} error={loginError} isLoading={isLoading} onChangePassword={changePassword} />;
     }
 
     const TabButton: React.FC<{tabName: ActiveTab, label: string}> = ({ tabName, label }) => (
@@ -168,11 +167,10 @@ const App: React.FC = () => {
         </button>
     );
 
-    return (
-        <div className="min-h-screen bg-gray-50 text-gray-800 font-sans">
-            <Header currentUser={currentUser} onLogout={handleLogout} onNavigate={setView} currentView={view} />
-            <main className="p-4 sm:p-6 lg:p-8 max-w-full mx-auto">
-                {view === 'calendar' ? (
+    const renderContent = () => {
+        switch (view) {
+            case 'calendar':
+                return (
                     <>
                         <div className="bg-white p-6 rounded-lg shadow-md mb-6">
                             <FilterControls 
@@ -181,6 +179,8 @@ const App: React.FC = () => {
                                 onAddAbsenceClick={handleOpenAbsenceModal}
                                 scheduledShifts={scheduledShifts}
                                 staff={filteredStaff} // Pass filtered staff for CSV download
+                                currentUser={currentUser}
+                                onManagePersonnelClick={() => setView('personnel')}
                             />
                         </div>
 
@@ -196,14 +196,14 @@ const App: React.FC = () => {
                                     currentDate={currentDate}
                                     staffList={filteredStaff}
                                     scheduledShifts={scheduledShifts}
+                                    shiftDefinitions={shiftDefinitions}
                                     onUncoveredShiftClick={handleOpenReplacementModal}
                                     currentUser={currentUser}
                                     onUpdateShift={handleUpdateShift}
-                                    onStaffClick={handleOpenStaffEditModal}
                                 />
                             </div>
                             <div className="lg:col-span-1">
-                                <Legend activeTab={activeTab} />
+                                <Legend activeTab={activeTab} shiftDefinitions={shiftDefinitions} />
                             </div>
                         </div>
                         {currentUser.role === StaffRole.HeadNurse && (
@@ -217,15 +217,41 @@ const App: React.FC = () => {
                             </div>
                         )}
                     </>
-                ) : (
+                );
+            case 'planner':
+                return (
                     <ShiftPlanner 
                         staffList={plannerStaffList}
                         activeTab={activeTab}
                         onGenerateSchedule={handleScheduleOverwrite}
                         getShiftDefinitionByCode={getShiftDefinitionByCode}
                         scheduledShifts={scheduledShifts}
+                        shiftDefinitions={shiftDefinitions}
+                        onAddShift={addShiftDefinition}
+                        deleteShiftDefinition={deleteShiftDefinition}
+                        updateShiftDefinition={updateShiftDefinition}
+                        initialShiftDefinitions={INITIAL_SHIFT_DEFINITIONS}
                     />
-                )}
+                );
+            case 'personnel':
+                 return (
+                    <PersonnelPage
+                        staffList={staff}
+                        onUpdateStaff={handleUpdateStaff}
+                        shiftDefinitions={shiftDefinitions}
+                    />
+                );
+            default:
+                return null;
+        }
+    };
+
+
+    return (
+        <div className="min-h-screen bg-gray-50 text-gray-800 font-sans">
+            <Header currentUser={currentUser} onLogout={handleLogout} onNavigate={setView} currentView={view} />
+            <main className="p-4 sm:p-6 lg:p-8 max-w-full mx-auto">
+                {renderContent()}
             </main>
 
             {isAbsenceModalOpen && (
@@ -234,6 +260,7 @@ const App: React.FC = () => {
                     onClose={handleCloseModals}
                     onAddAbsence={handleAddAbsence}
                     currentUser={currentUser}
+                    shiftDefinitions={shiftDefinitions}
                 />
             )}
 
@@ -246,14 +273,6 @@ const App: React.FC = () => {
                     getStaffById={getStaffById}
                     getShiftDefinitionByCode={getShiftDefinitionByCode}
                     currentUser={currentUser}
-                />
-            )}
-
-            {isStaffEditModalOpen && editingStaff && (
-                <StaffEditModal
-                    staff={editingStaff}
-                    onClose={handleCloseModals}
-                    onSave={handleUpdateStaff}
                 />
             )}
         </div>

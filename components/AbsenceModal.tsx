@@ -1,7 +1,7 @@
 
+
 import React, { useState, useEffect } from 'react';
-import type { Staff } from '../types';
-import { SHIFT_DEFINITIONS } from '../constants';
+import type { Staff, ShiftDefinition } from '../types';
 import { ShiftTime, StaffRole } from '../types';
 
 interface AbsenceModalProps {
@@ -9,9 +9,10 @@ interface AbsenceModalProps {
     onClose: () => void;
     onAddAbsence: (staffId: string, reason: string, startDate: Date, endDate: Date) => void;
     currentUser: Staff;
+    shiftDefinitions: ShiftDefinition[];
 }
 
-export const AbsenceModal: React.FC<AbsenceModalProps> = ({ staffList, onClose, onAddAbsence, currentUser }) => {
+export const AbsenceModal: React.FC<AbsenceModalProps> = ({ staffList, onClose, onAddAbsence, currentUser, shiftDefinitions }) => {
     const [staffId, setStaffId] = useState<string>(currentUser.id);
     const [reason, setReason] = useState<string>('A');
     const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -27,7 +28,7 @@ export const AbsenceModal: React.FC<AbsenceModalProps> = ({ staffList, onClose, 
         }
     }, [currentUser, isHeadNurse]);
 
-    const absenceReasons = SHIFT_DEFINITIONS.filter(s => s.time === ShiftTime.Absence);
+    const absenceReasons = shiftDefinitions.filter(s => s.time === ShiftTime.Absence);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();

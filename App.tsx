@@ -10,7 +10,6 @@ import { useShiftData } from './hooks/useShiftData';
 import type { ScheduledShift, Staff } from './types';
 import { ContractType, StaffRole } from './types';
 import { LoginScreen } from './components/LoginScreen';
-import { SHIFT_DEFINITIONS as INITIAL_SHIFT_DEFINITIONS } from './constants';
 import { mockAuthenticateUser } from './services/authService';
 import { ShiftPlanner } from './components/ShiftPlanner';
 import { PersonnelPage } from './components/PersonnelPage';
@@ -230,7 +229,6 @@ const App: React.FC = () => {
                         onAddShift={addShiftDefinition}
                         deleteShiftDefinition={deleteShiftDefinition}
                         updateShiftDefinition={updateShiftDefinition}
-                        initialShiftDefinitions={INITIAL_SHIFT_DEFINITIONS}
                     />
                 );
             case 'personnel':

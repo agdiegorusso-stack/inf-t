@@ -91,7 +91,8 @@ export interface ReplacementOption {
     reason: string;
 }
 
-export type ShiftRequirements = Record<string, number[]>; // code -> [Sun, Mon, Tue, Wed, Thu, Fri, Sat]
+export type ShiftRequirementValue = number | { min: number; max: number };
+export type ShiftRequirements = Record<string, ShiftRequirementValue[]>; // code -> [Sun, Mon, Tue, Wed, Thu, Fri, Sat]
 
 export interface RequirementPreset {
     id: string;

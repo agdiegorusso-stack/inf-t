@@ -34,10 +34,6 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ staffL
             setError("Le nuove password non coincidono.");
             return;
         }
-        if (newPassword.length < 6) {
-            setError("La nuova password deve essere di almeno 6 caratteri.");
-            return;
-        }
         
         setIsLoading(true);
         try {

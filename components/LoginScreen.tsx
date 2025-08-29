@@ -34,7 +34,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ staffList, onLogin, on
             <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
                 <div className="w-full max-w-md p-8 space-y-8 bg-white rounded-lg shadow-lg">
                     <div className="text-center">
-                        <img src="/image/aslroma2logo.jpg" alt="Logo ASL Roma 2" className="w-24 h-auto mx-auto" />
+<img src="https://cosips.it/wp-content/uploads/2020/07/asl-roma2.png" alt="Logo ASL Roma 2" className="w-80 h-auto mx-auto" />
                         <h1 className="mt-4 text-3xl font-bold text-gray-800">Gestione Turni</h1>
                         <p className="mt-2 text-sm text-gray-600">Inserisci le tue credenziali per accedere</p>
                     </div>
@@ -118,3 +118,4 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ staffList, onLogin, on
             )}
         </>
     );
+}

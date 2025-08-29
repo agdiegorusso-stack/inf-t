@@ -1,7 +1,6 @@
-
 // FIX: Import `useCallback` from `react` to resolve 'Cannot find name' error.
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import type { Staff, ScheduledShift, ShiftDefinition, ShiftRequirements, RequirementPreset } from '../types';
+import type { Staff, ScheduledShift, ShiftDefinition, ShiftRequirements, RequirementPreset, ShiftRequirementValue } from '../types';
 import { UNASSIGNED_STAFF_ID } from '../constants';
 import { Location, ShiftTime, ContractType, StaffRole } from '../types';
 import { isShiftAllowed } from '../utils/shiftUtils';
@@ -20,14 +19,19 @@ interface ShiftPlannerProps {
     onAddShift: (newShift: ShiftDefinition) => void;
     deleteShiftDefinition: (code: string) => void;
     updateShiftDefinition: (originalCode: string, updatedShift: ShiftDefinition) => void;
-    initialShiftDefinitions: ShiftDefinition[];
 }
 
+type RuleType = 'specific_days' | 'all_days' | 'specific_date';
 const weekDays = ['Dom', 'Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab'];
 const tabTitleMap: Record<ActiveTab, string> = {
     nurses: 'Infermieri e Caposala',
     oss: 'OSS',
     doctors: 'Medici',
+};
+const requirementLabelMap: Record<ActiveTab, string> = {
+    nurses: 'Infermieri necessari',
+    oss: 'OSS necessari',
+    doctors: 'Medici necessari',
 };
 
 // Helper to format date to YYYY-MM-DD without timezone issues
@@ -38,7 +42,31 @@ const formatDate = (date: Date): string => {
     return `${y}-${m}-${d}`;
 };
 
-export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab, onGenerateSchedule, getShiftDefinitionByCode, scheduledShifts, shiftDefinitions, onAddShift, deleteShiftDefinition, updateShiftDefinition, initialShiftDefinitions }) => {
+// Helper to format requirement value for display
+const formatRequirement = (req: ShiftRequirementValue | undefined): string => {
+    if (req === undefined || req === null) return '0';
+    if (typeof req === 'number') return req.toString();
+    if (req.min === req.max) return req.min.toString();
+    // Wrap with parentheses for clarity as requested
+    return `(${req.min}-${req.max})`;
+};
+
+// Helper to parse requirement value from input string
+const parseRequirement = (value: string): ShiftRequirementValue => {
+    const trimmed = value.trim().replace(/[()]/g, ''); // Remove parentheses before parsing
+    if (trimmed.includes('-')) {
+        const parts = trimmed.split('-').map(p => parseInt(p.trim(), 10));
+        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            const [min, max] = parts;
+            if (min === max) return Math.max(0, min);
+            return { min: Math.max(0, min), max: Math.max(0, max) };
+        }
+    }
+    const num = parseInt(trimmed, 10);
+    return isNaN(num) ? 0 : Math.max(0, num);
+};
+
+export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab, onGenerateSchedule, getShiftDefinitionByCode, scheduledShifts, shiftDefinitions, onAddShift, deleteShiftDefinition, updateShiftDefinition }) => {
     
     const [requirements, setRequirements] = useState<ShiftRequirements>({});
     const [presets, setPresets] = useState<RequirementPreset[]>([]);
@@ -52,8 +80,6 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
     const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
     const [isAddShiftModalOpen, setIsAddShiftModalOpen] = useState(false);
     const [editingShift, setEditingShift] = useState<ShiftDefinition | null>(null);
-
-    const initialShiftCodes = useMemo(() => new Set(initialShiftDefinitions.map(s => s.code)), [initialShiftDefinitions]);
     
     const relevantShifts = useMemo(() => {
         return shiftDefinitions.filter(s => {
@@ -120,11 +146,15 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
     }, [activeTab]);
 
 
-    const handleRequirementChange = (code: string, dayIndex: number, value: number) => {
-        setRequirements(prev => ({
-            ...prev,
-            [code]: (prev[code] || Array(7).fill(0)).map((v, i) => i === dayIndex ? Math.max(0, value) : v)
-        }));
+    const handleRequirementChange = (code: string, dayIndex: number, value: string) => {
+        const parsedValue = parseRequirement(value);
+        setRequirements(prev => {
+            const newReqs = { ...prev };
+            const currentReqs = [...(newReqs[code] || Array(7).fill(0))];
+            currentReqs[dayIndex] = parsedValue;
+            newReqs[code] = currentReqs;
+            return newReqs;
+        });
     };
     
     const handleConfirmSavePreset = () => {
@@ -238,6 +268,39 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
     const handleEditShiftClick = (shift: ShiftDefinition) => {
         setEditingShift(shift);
     };
+    
+    const handleApplyShiftRule = useCallback((shiftCode: string, ruleType: RuleType, days: number[], date: string, count: { min: number; max: number }) => {
+        setRequirements(prevReqs => {
+            // Create shallow copies to ensure React detects the change
+            const newReqs = { ...prevReqs };
+            const currentShiftReqs = [...(newReqs[shiftCode] || Array(7).fill(0))];
+            
+            // Determine the value to set: a number if min equals max, otherwise an object
+            const valueToSet: ShiftRequirementValue = count.min === count.max
+                ? count.min
+                : { min: count.min, max: count.max };
+    
+            const applyValue = (dayIndex: number) => {
+                currentShiftReqs[dayIndex] = valueToSet;
+            };
+    
+            if (ruleType === 'specific_date') {
+                // For a specific date, find its day of the week and apply the rule.
+                // The requirements table is a generic weekly template.
+                const specificDateObj = new Date(date + 'T12:00:00Z'); // Use Z to avoid timezone shifts
+                const dayOfWeek = specificDateObj.getDay();
+                applyValue(dayOfWeek);
+            } else { // 'specific_days' or 'all_days'
+                // Apply the rule to all specified day indexes
+                days.forEach(applyValue);
+            }
+            
+            // Assign the newly modified array back to the new requirements object
+            newReqs[shiftCode] = currentShiftReqs;
+            return newReqs;
+        });
+    }, []);
+
 
     const handleSaveShift = (updatedShift: ShiftDefinition) => {
         if (editingShift) {
@@ -276,22 +339,16 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                     const lastMonthShiftDef = lastMonthShift?.shiftCode ? getShiftDefinitionByCode(lastMonthShift.shiftCode) : null;
 
                     if (lastMonthShiftDef && lastMonthShiftDef.time === ShiftTime.Night) {
-                        if (!staffAssignments[staff.id]) {
-                            staffAssignments[staff.id] = {};
-                        }
+                        if (!staffAssignments[staff.id]) staffAssignments[staff.id] = {};
                         staffAssignments[staff.id][firstDayOfTargetMonthStr] = 'S';
-                        log.push(`💡 Pre-assegnato smonto notte ('S') a ${staff.name} per il ${firstDayOfTargetMonthStr}.`);
+                        log.push(`💡 Pre-assegnato 'S' a ${staff.name} il ${firstDayOfTargetMonthStr}.`);
                     }
                 });
 
                 // --- GESTIONE RIPOSO DOMENICALE (SPECIFICO PER INFERMIERI) ---
                 if (activeTab === 'nurses') {
-                    log.push(`ℹ️ Applica regola - Riposo Domenicale per Caposala, h6 e h12.`);
-                    const staffToRestOnSunday = staffList.filter(s =>
-                        s.role === StaffRole.HeadNurse ||
-                        s.contract === ContractType.H6 ||
-                        s.contract === ContractType.H12
-                    );
+                    log.push(`ℹ️ Applica regola riposo Domenicale per Caposala, h6 e h12.`);
+                    const staffToRestOnSunday = staffList.filter(s => s.role === StaffRole.HeadNurse || s.contract === ContractType.H6 || s.contract === ContractType.H12);
                     for (let day = 1; day <= daysInMonth; day++) {
                         const date = new Date(year, month - 1, day);
                         if (date.getDay() === 0) { // È Domenica
@@ -306,16 +363,8 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                     }
                 }
 
-                // --- NUOVO ALGORITMO DI GENERAZIONE GIORNALIERO ---
-                const shiftTimePriority: Record<ShiftTime, number> = {
-                    [ShiftTime.Night]: 1,
-                    [ShiftTime.Afternoon]: 2,
-                    [ShiftTime.Morning]: 3,
-                    [ShiftTime.FullDay]: 4,
-                    [ShiftTime.Absence]: 9,
-                    [ShiftTime.Rest]: 9,
-                    [ShiftTime.OffShift]: 9
-                };
+                // --- ALGORITMO DI GENERAZIONE GIORNALIERO ---
+                const shiftTimePriority: Record<ShiftTime, number> = { [ShiftTime.Night]: 1, [ShiftTime.Afternoon]: 2, [ShiftTime.Morning]: 3, [ShiftTime.FullDay]: 4, [ShiftTime.Absence]: 9, [ShiftTime.Rest]: 9, [ShiftTime.OffShift]: 9 };
 
                 for (let day = 1; day <= daysInMonth; day++) {
                     const date = new Date(year, month - 1, day);
@@ -323,62 +372,79 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                     const dayOfWeek = date.getDay();
 
                     const requiredSlots: { code: string, originalIndex: number }[] = [];
+                    const optionalSlots: { code: string, originalIndex: number }[] = [];
+
                     Object.entries(requirements).forEach(([shiftCode, needs]) => {
-                        const neededCount = needs[dayOfWeek] || 0;
-                        for (let i = 0; i < neededCount; i++) {
-                            requiredSlots.push({ code: shiftCode, originalIndex: i });
-                        }
+                        const reqValue = needs[dayOfWeek];
+                        let min = 0, max = 0;
+                        if (typeof reqValue === 'number') { min = max = reqValue; }
+                        else if (reqValue && typeof reqValue === 'object') { min = reqValue.min; max = reqValue.max; }
+                        for (let i = 0; i < min; i++) requiredSlots.push({ code: shiftCode, originalIndex: i });
+                        for (let i = 0; i < (max - min); i++) optionalSlots.push({ code: shiftCode, originalIndex: i + min });
                     });
 
-                    requiredSlots.sort((a, b) => {
+                    const sortFn = (a: {code:string}, b: {code:string}) => {
                         const defA = getShiftDefinitionByCode(a.code);
                         const defB = getShiftDefinitionByCode(b.code);
                         const priorityA = defA ? shiftTimePriority[defA.time] : 99;
                         const priorityB = defB ? shiftTimePriority[defB.time] : 99;
-                        if (priorityA !== priorityB) {
-                            return priorityA - priorityB;
-                        }
-                        return a.code.localeCompare(b.code);
-                    });
+                        return priorityA !== priorityB ? priorityA - priorityB : a.code.localeCompare(b.code);
+                    };
 
-                    let dailyRequiredSlots = [...requiredSlots];
-                    let availableStaff = staffList.filter(s => !staffAssignments[s.id]?.[dateStr]);
-                    availableStaff.sort(() => Math.random() - 0.5);
+                    requiredSlots.sort(sortFn);
+                    optionalSlots.sort(sortFn);
 
-                    for (const staffMember of availableStaff) {
-                        const assignedSlotIndex = dailyRequiredSlots.findIndex(slot =>
-                            isShiftAllowed(slot.code, staffMember, shiftDefinitions)
-                        );
+                    let availableStaffForDay = staffList.filter(s => !staffAssignments[s.id]?.[dateStr]);
+                    availableStaffForDay.sort(() => Math.random() - 0.5);
 
+                    const staffAssignedThisDay = new Set<string>();
+                    
+                    // 1. Assign REQUIRED shifts
+                    let slotsToFill = [...requiredSlots];
+                    for (const staffMember of availableStaffForDay) {
+                        const assignedSlotIndex = slotsToFill.findIndex(slot => isShiftAllowed(slot.code, staffMember, shiftDefinitions));
                         if (assignedSlotIndex !== -1) {
-                            const [assignedShift] = dailyRequiredSlots.splice(assignedSlotIndex, 1);
-                            if (!staffAssignments[staffMember.id]) {
-                                staffAssignments[staffMember.id] = {};
-                            }
+                            const [assignedShift] = slotsToFill.splice(assignedSlotIndex, 1);
+                            if (!staffAssignments[staffMember.id]) staffAssignments[staffMember.id] = {};
                             staffAssignments[staffMember.id][dateStr] = assignedShift.code;
-
-                            const shiftDef = getShiftDefinitionByCode(assignedShift.code);
-                            if (shiftDef?.time === ShiftTime.Night && day < daysInMonth) {
-                                const nextDate = new Date(year, month - 1, day + 1);
-                                const nextDateStr = formatDate(nextDate);
-                                if (!staffAssignments[staffMember.id]?.[nextDateStr]) {
-                                    staffAssignments[staffMember.id][nextDateStr] = 'S';
-                                }
-                            }
+                            staffAssignedThisDay.add(staffMember.id);
+                        }
+                    }
+                    
+                    // 2. Assign OPTIONAL shifts
+                    let remainingStaff = availableStaffForDay.filter(s => !staffAssignedThisDay.has(s.id));
+                    for (const staffMember of remainingStaff) {
+                        const assignedSlotIndex = optionalSlots.findIndex(slot => isShiftAllowed(slot.code, staffMember, shiftDefinitions));
+                         if (assignedSlotIndex !== -1) {
+                            const [assignedShift] = optionalSlots.splice(assignedSlotIndex, 1);
+                            if (!staffAssignments[staffMember.id]) staffAssignments[staffMember.id] = {};
+                            staffAssignments[staffMember.id][dateStr] = assignedShift.code;
                         }
                     }
 
-                    dailyRequiredSlots.forEach((uncoveredSlot) => {
+                    // Handle Smonto Notte for ALL assigned night shifts
+                    staffList.forEach(staff => {
+                        if (staffAssignments[staff.id]?.[dateStr]) {
+                            const assignedCode = staffAssignments[staff.id][dateStr];
+                            const shiftDef = getShiftDefinitionByCode(assignedCode);
+                             if (shiftDef?.time === ShiftTime.Night && day < daysInMonth) {
+                                const nextDateStr = formatDate(new Date(year, month - 1, day + 1));
+                                if (!staffAssignments[staff.id]?.[nextDateStr]) {
+                                     if (!staffAssignments[staff.id]) staffAssignments[staff.id] = {};
+                                     staffAssignments[staff.id][nextDateStr] = 'S';
+                                }
+                            }
+                        }
+                    });
+
+                    // Log uncovered required shifts
+                    slotsToFill.forEach((uncoveredSlot) => {
                         log.push(`❌ Personale insufficiente per ${uncoveredSlot.code} il ${dateStr}.`);
-                        newSchedule.push({
-                            id: `uncovered-${dateStr}-${uncoveredSlot.code}-${uncoveredSlot.originalIndex}`,
-                            date: dateStr,
-                            staffId: UNASSIGNED_STAFF_ID,
-                            shiftCode: uncoveredSlot.code,
-                        });
+                        newSchedule.push({ id: `uncovered-${dateStr}-${uncoveredSlot.code}-${uncoveredSlot.originalIndex}`, date: dateStr, staffId: UNASSIGNED_STAFF_ID, shiftCode: uncoveredSlot.code });
                     });
                 }
 
+                // Final assembly of schedule
                 Object.entries(staffAssignments).forEach(([staffId, assignments]) => {
                     Object.entries(assignments).forEach(([date, shiftCode]) => {
                         newSchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode });
@@ -387,19 +453,16 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
 
                 staffList.forEach(staff => {
                     for (let day = 1; day <= daysInMonth; day++) {
-                        const date = new Date(year, month - 1, day);
-                        const dateStr = formatDate(date);
+                        const dateStr = formatDate(new Date(year, month - 1, day));
                         if (!staffAssignments[staff.id]?.[dateStr]) {
                             newSchedule.push({ id: `${staff.id}-${dateStr}`, staffId: staff.id, date: dateStr, shiftCode: 'R' });
                         }
                     }
                 });
-
-                const assignedCount = newSchedule.filter(s => s.staffId !== UNASSIGNED_STAFF_ID).length;
-                log.push(`✅ Generazione completata. ${assignedCount} turni assegnati.`);
+                
+                log.push(`✅ Generazione completata.`);
                 setGenerationLog(log);
-                const affectedIds = [...staffList.map(s => s.id), UNASSIGNED_STAFF_ID];
-                onGenerateSchedule(newSchedule, targetDate, affectedIds);
+                onGenerateSchedule(newSchedule, targetDate, [...staffList.map(s => s.id), UNASSIGNED_STAFF_ID]);
 
             } catch (error) {
                 console.error("Errore durante la generazione dei turni:", error);
@@ -407,19 +470,10 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                 setGenerationLog(prev => [...prev, `❌ ERRORE CRITICO: ${errorMessage}`]);
             } finally {
                 setIsGenerating(false);
-                setIsConfirming(false); // Reset to initial state
+                setIsConfirming(false);
             }
         }, 500);
-    }, [
-        activeTab,
-        targetDate,
-        requirements,
-        staffList,
-        scheduledShifts,
-        getShiftDefinitionByCode,
-        onGenerateSchedule,
-        shiftDefinitions,
-    ]);
+    }, [activeTab, targetDate, requirements, staffList, scheduledShifts, getShiftDefinitionByCode, onGenerateSchedule, shiftDefinitions]);
 
     const selectedPresetIsDefault = useMemo(() => {
         const selected = presets.find(p => p.id === selectedPresetId);
@@ -444,7 +498,7 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                     onClose={() => setEditingShift(null)}
                     onSave={handleSaveShift}
                     onDelete={handleDeleteShift}
-                    isDefaultShift={initialShiftCodes.has(editingShift.code)}
+                    onApplyRule={handleApplyShiftRule}
                 />
             )}
 
@@ -514,7 +568,10 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                     <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50 sticky top-0 z-10">
                             <tr>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sticky left-0 bg-gray-50 z-20">Turno</th>
+                                <th rowSpan={2} className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sticky left-0 bg-gray-50 z-20 align-bottom">Turno</th>
+                                <th colSpan={7} className="pt-2 pb-1 text-center text-xm font-medium text-gray-500 uppercase tracking-wider">{requirementLabelMap[activeTab]}</th>
+                            </tr>
+                            <tr>
                                 {weekDays.map(day => <th key={day} className="w-20 px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">{day}</th>)}
                             </tr>
                         </thead>
@@ -535,9 +592,9 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                                     </td>
                                     {weekDays.map((_, dayIndex) => (
                                         <td key={dayIndex} className="px-2 py-1">
-                                            <input type="number" min="0" value={requirements[shift.code]?.[dayIndex] ?? 0}
-                                                   onChange={(e) => handleRequirementChange(shift.code, dayIndex, parseInt(e.target.value, 10) || 0)}
-                                                   className="w-16 p-1 text-center border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                                            <input type="text" value={formatRequirement(requirements[shift.code]?.[dayIndex])}
+                                                   onChange={(e) => handleRequirementChange(shift.code, dayIndex, e.target.value)}
+                                                   className="w-20 p-1 text-center border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                                                    aria-label={`Fabbisogno per ${shift.code} di ${weekDays[dayIndex]}`} />
                                         </td>
                                     ))}

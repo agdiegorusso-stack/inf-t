@@ -1,0 +1,5 @@
+{
+  "name": "Copy of Gestione Turni Ospedalieri",
+  "description": "Un'applicazione web per la gestione dei turni del personale ospedaliero (infermieri, OSS, medici) in modo efficiente. Permette di visualizzare i turni, gestire le assenze e trovare sostituzioni in caso di carenza di personale.",
+  "requestFramePermissions": []
+}

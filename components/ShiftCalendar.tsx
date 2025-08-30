@@ -14,6 +14,7 @@ interface ShiftCalendarProps {
     onUncoveredShiftClick: (shift: ScheduledShift) => void;
     currentUser: Staff;
     onUpdateShift: (staffId: string, date: string, newShiftCode: string) => void;
+    onOpenStaffDetail: (staff: Staff) => void;
 }
 
 interface ShiftCellProps {
@@ -120,7 +121,7 @@ const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, shiftDefiniti
 };
 
 
-export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staffList, scheduledShifts, shiftDefinitions, onUncoveredShiftClick, currentUser, onUpdateShift }) => {
+export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staffList, scheduledShifts, shiftDefinitions, onUncoveredShiftClick, currentUser, onUpdateShift, onOpenStaffDetail }) => {
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -179,8 +180,9 @@ export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staff
                     {sortedStaff.map(staff => (
                         <React.Fragment key={staff.id}>
                             <div 
-                                className="sticky left-0 bg-white z-10 p-2 text-sm font-medium text-gray-800 border-t border-gray-200 flex items-center truncate"
-                                title={staff.name}
+                                className="sticky left-0 bg-white z-10 p-2 text-sm font-medium text-gray-800 border-t border-gray-200 flex items-center truncate cursor-pointer hover:bg-gray-100 transition-colors"
+                                title={`${staff.name} - Clicca per gestire`}
+                                onClick={() => onOpenStaffDetail(staff)}
                             >
                                 {staff.name}
                             </div>

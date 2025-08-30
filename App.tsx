@@ -13,6 +13,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { mockAuthenticateUser } from './services/authService';
 import { ShiftPlanner } from './components/ShiftPlanner';
 import { PersonnelPage } from './components/PersonnelPage';
+import { StaffEditModal } from './components/StaffEditModal';
 
 export type ActiveTab = 'nurses' | 'oss' | 'doctors';
 
@@ -42,6 +43,7 @@ const App: React.FC = () => {
     const [isAbsenceModalOpen, setIsAbsenceModalOpen] = useState(false);
     const [isReplacementModalOpen, setIsReplacementModalOpen] = useState(false);
     const [selectedShift, setSelectedShift] = useState<ScheduledShift | null>(null);
+    const [selectedStaffForDetail, setSelectedStaffForDetail] = useState<Staff | null>(null);
     const [view, setView] = useState<'calendar' | 'planner' | 'personnel'>('calendar');
     const [activeTab, setActiveTab] = useState<ActiveTab>('nurses');
 
@@ -80,10 +82,15 @@ const App: React.FC = () => {
         setIsReplacementModalOpen(true);
     }, []);
     
+    const handleOpenStaffDetail = useCallback((staff: Staff) => {
+        setSelectedStaffForDetail(staff);
+    }, []);
+
     const handleCloseModals = useCallback(() => {
         setIsAbsenceModalOpen(false);
         setIsReplacementModalOpen(false);
         setSelectedShift(null);
+        setSelectedStaffForDetail(null);
     }, []);
     
     const handleAddAbsence = useCallback((staffId: string, reason: string, startDate: Date, endDate: Date) => {
@@ -199,6 +206,7 @@ const App: React.FC = () => {
                                     onUncoveredShiftClick={handleOpenReplacementModal}
                                     currentUser={currentUser}
                                     onUpdateShift={handleUpdateShift}
+                                    onOpenStaffDetail={handleOpenStaffDetail}
                                 />
                             </div>
                             <div className="lg:col-span-1">
@@ -271,6 +279,15 @@ const App: React.FC = () => {
                     getStaffById={getStaffById}
                     getShiftDefinitionByCode={getShiftDefinitionByCode}
                     currentUser={currentUser}
+                />
+            )}
+            
+            {selectedStaffForDetail && (
+                <StaffEditModal
+                    staff={selectedStaffForDetail}
+                    onClose={handleCloseModals}
+                    onSave={handleUpdateStaff}
+                    shiftDefinitions={shiftDefinitions}
                 />
             )}
         </div>

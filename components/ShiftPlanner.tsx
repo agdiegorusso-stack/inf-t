@@ -57,9 +57,12 @@ const parseRequirement = (value: string): ShiftRequirementValue => {
     if (trimmed.includes('-')) {
         const parts = trimmed.split('-').map(p => parseInt(p.trim(), 10));
         if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-            const [min, max] = parts;
-            if (min === max) return Math.max(0, min);
-            return { min: Math.max(0, min), max: Math.max(0, max) };
+            let [min, max] = [Math.max(0, parts[0]), Math.max(0, parts[1])];
+            if (min > max) { // Swap if min is greater than max
+                [min, max] = [max, min];
+            }
+            if (min === max) return min;
+            return { min, max };
         }
     }
     const num = parseInt(trimmed, 10);
@@ -271,11 +274,9 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
     
     const handleApplyShiftRule = useCallback((shiftCode: string, ruleType: RuleType, days: number[], date: string, count: { min: number; max: number }) => {
         setRequirements(prevReqs => {
-            // Create shallow copies to ensure React detects the change
             const newReqs = { ...prevReqs };
             const currentShiftReqs = [...(newReqs[shiftCode] || Array(7).fill(0))];
             
-            // Determine the value to set: a number if min equals max, otherwise an object
             const valueToSet: ShiftRequirementValue = count.min === count.max
                 ? count.min
                 : { min: count.min, max: count.max };
@@ -285,17 +286,13 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
             };
     
             if (ruleType === 'specific_date') {
-                // For a specific date, find its day of the week and apply the rule.
-                // The requirements table is a generic weekly template.
-                const specificDateObj = new Date(date + 'T12:00:00Z'); // Use Z to avoid timezone shifts
+                const specificDateObj = new Date(date + 'T12:00:00Z');
                 const dayOfWeek = specificDateObj.getDay();
                 applyValue(dayOfWeek);
             } else { // 'specific_days' or 'all_days'
-                // Apply the rule to all specified day indexes
                 days.forEach(applyValue);
             }
             
-            // Assign the newly modified array back to the new requirements object
             newReqs[shiftCode] = currentShiftReqs;
             return newReqs;
         });
@@ -590,14 +587,32 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                                             </svg>
                                         </button>
                                     </td>
-                                    {weekDays.map((_, dayIndex) => (
-                                        <td key={dayIndex} className="px-2 py-1">
-                                            <input type="text" value={formatRequirement(requirements[shift.code]?.[dayIndex])}
-                                                   onChange={(e) => handleRequirementChange(shift.code, dayIndex, e.target.value)}
-                                                   className="w-20 p-1 text-center border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
-                                                   aria-label={`Fabbisogno per ${shift.code} di ${weekDays[dayIndex]}`} />
-                                        </td>
-                                    ))}
+                                    {weekDays.map((_, dayIndex) => {
+                                        const reqValue = requirements[shift.code]?.[dayIndex];
+                                        const isRange = typeof reqValue === 'object' && reqValue !== null;
+
+                                        return (
+                                            <td key={dayIndex} className="px-2 py-1">
+                                                {isRange ? (
+                                                    <div
+                                                        className="w-20 h-[38px] p-1 flex items-center justify-center text-center border border-gray-200 bg-gray-100 text-gray-700 rounded-md shadow-sm"
+                                                        title={`Intervallo: ${reqValue.min}-${reqValue.max}. Usa "Gestisci Turno" per modificare.`}
+                                                    >
+                                                        {formatRequirement(reqValue)}
+                                                    </div>
+                                                ) : (
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        value={typeof reqValue === 'number' ? reqValue : 0}
+                                                        onChange={(e) => handleRequirementChange(shift.code, dayIndex, e.target.value)}
+                                                        className="w-20 p-1 text-center border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                                                        aria-label={`Fabbisogno per ${shift.code} di ${weekDays[dayIndex]}`}
+                                                    />
+                                                )}
+                                            </td>
+                                        );
+                                    })}
                                 </tr>
                             ))}
                         </tbody>

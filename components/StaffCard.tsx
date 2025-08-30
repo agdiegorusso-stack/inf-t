@@ -1,18 +1,23 @@
 
-import React, { useState, useMemo, useCallback } from 'react';
-import type { Staff, ShiftDefinition } from '../types';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import type { Staff, ShiftDefinition, Team } from '../types';
 import { StaffRole, ContractType, ShiftTime } from '../types';
 
 interface StaffCardProps {
     staff: Staff;
     onSave: (staffId: string, updates: Partial<Omit<Staff, 'id' | 'name'>>) => void;
     shiftDefinitions: ShiftDefinition[];
+    teams: Team[];
 }
 
-export const StaffCard: React.FC<StaffCardProps> = ({ staff, onSave, shiftDefinitions }) => {
+export const StaffCard: React.FC<StaffCardProps> = ({ staff, onSave, shiftDefinitions, teams }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [formData, setFormData] = useState<Staff>(staff);
     
+    useEffect(() => {
+        setFormData(staff);
+    }, [staff]);
+
     const relevantShifts = useMemo(() => {
         const roleFilter = (s: ShiftDefinition) => {
              if (staff.role === StaffRole.HeadNurse) return s.roles.includes(StaffRole.Nurse) || s.roles.includes(StaffRole.HeadNurse);
@@ -32,7 +37,6 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onSave, shiftDefini
     }, [staff]);
 
     const handleSave = useCallback(() => {
-        // We only pass the fields that could have changed.
         const { id, name, ...updates } = formData;
         onSave(staff.id, updates);
         setIsExpanded(false);
@@ -51,6 +55,17 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onSave, shiftDefini
             newUnavail = currentUnavail.filter(code => code !== shiftCode);
         }
         setFormData(prev => ({...prev, unavailableShiftCodes: newUnavail }));
+    };
+    
+    const handleTeamChange = (teamId: string, isSelected: boolean) => {
+        const currentTeamIds = formData.teamIds || [];
+        let newTeamIds;
+        if (isSelected) {
+            newTeamIds = [...new Set([...currentTeamIds, teamId])];
+        } else {
+            newTeamIds = currentTeamIds.filter(id => id !== teamId);
+        }
+        handleInputChange('teamIds', newTeamIds);
     };
 
     const contractLabel = {
@@ -76,10 +91,10 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onSave, shiftDefini
             
             {isExpanded && (
                 <div className="border-t border-gray-200 p-6 space-y-6 bg-gray-50">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {/* Column 1: Dati e Contratto */}
                         <div className="space-y-4">
-                            <h4 className="text-md font-semibold text-gray-700">Dati Anagrafici e Contratto</h4>
+                            <h4 className="text-md font-semibold text-gray-700">Dati e Contratto</h4>
                              <div>
                                 <label htmlFor={`role-${staff.id}`} className="block text-sm font-medium text-gray-700 mb-1">Ruolo</label>
                                 <select id={`role-${staff.id}`} value={formData.role} onChange={(e) => handleInputChange('role', e.target.value as StaffRole)}
@@ -106,37 +121,56 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onSave, shiftDefini
                                 <input id={`email-${staff.id}`} type="email" value={formData.email || ''} onChange={(e) => handleInputChange('email', e.target.value)}
                                     className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="Es. nome.cognome@ospedale.it"/>
                             </div>
-                            <h4 className="text-md font-semibold text-gray-700 pt-4">Regole Speciali</h4>
-                            <div className="flex items-start">
+                        </div>
+
+                        {/* Column 2: Regole e Team */}
+                        <div className="space-y-4">
+                             <h4 className="text-md font-semibold text-gray-700">Regole e Team</h4>
+                             <div className="flex items-start">
                                 <div className="flex items-center h-5">
                                     <input id={`law104-${staff.id}`} type="checkbox" checked={formData.hasLaw104 || false} onChange={(e) => handleInputChange('hasLaw104', e.target.checked)}
                                            className="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300 rounded"/>
                                 </div>
                                 <div className="ml-3 text-sm">
                                     <label htmlFor={`law104-${staff.id}`} className="font-medium text-gray-700">Legge 104</label>
-                                    <p className="text-gray-500">Se abilitato, verranno applicate le regole per la L. 104.</p>
                                 </div>
                             </div>
                              <div>
                                 <label htmlFor={`specialRules-${staff.id}`} className="block text-sm font-medium text-gray-700 mb-1">Note e Regole Specifiche</label>
                                 <textarea id={`specialRules-${staff.id}`} value={formData.specialRules || ''} onChange={(e) => handleInputChange('specialRules', e.target.value)}
-                                          rows={3} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                                          placeholder="Es. 'Evitare doppi turni', '3 giorni HD a settimana da specificare'"></textarea>
+                                          rows={2} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                          placeholder="Es. 'Evitare doppi turni'"></textarea>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Team di Appartenenza</label>
+                                <div className="max-h-40 overflow-y-auto space-y-2 p-3 bg-white rounded-md border">
+                                    {teams.map(team => (
+                                        <div key={team.id} className="flex items-center">
+                                            <input type="checkbox" id={`team-${staff.id}-${team.id}`} 
+                                                   checked={formData.teamIds?.includes(team.id)}
+                                                   onChange={(e) => handleTeamChange(team.id, e.target.checked)}
+                                                   className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"/>
+                                            <label htmlFor={`team-${staff.id}-${team.id}`} className="ml-3 flex items-center text-sm text-gray-700">
+                                                {team.name}
+                                            </label>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
                         </div>
 
-                        {/* Column 2: Disponibilità */}
+                        {/* Column 3: Disponibilità */}
                         <div>
                              <h4 className="text-md font-semibold text-gray-700">Disponibilità Turni</h4>
                              <p className="text-sm text-gray-500 mb-3">Deseleziona i turni che questa persona <span className="font-bold">non deve</span> svolgere.</p>
                              <div className="max-h-96 overflow-y-auto space-y-2 p-3 bg-white rounded-md border">
                                  {relevantShifts.map(shift => (
                                     <div key={shift.code} className="flex items-center">
-                                        <input type="checkbox" id={`shift-${staff.id}-${shift.code}`} 
+                                        <input type="checkbox" id={`shift-card-${staff.id}-${shift.code}`} 
                                                checked={!formData.unavailableShiftCodes?.includes(shift.code)}
                                                onChange={(e) => handleShiftAvailabilityChange(shift.code, !e.target.checked)}
                                                className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"/>
-                                        <label htmlFor={`shift-${staff.id}-${shift.code}`} className="ml-3 flex items-center text-sm text-gray-700">
+                                        <label htmlFor={`shift-card-${staff.id}-${shift.code}`} className="ml-3 flex items-center text-sm text-gray-700">
                                             <span className={`w-8 text-center mr-2 font-bold p-1 text-xs rounded-sm ${shift.color} ${shift.textColor}`}>{shift.code.replace('_doc', '')}</span>
                                             {shift.description}
                                         </label>

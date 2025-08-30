@@ -1,7 +1,8 @@
 
 
+
 import React, { useMemo } from 'react';
-import type { Staff, ScheduledShift, ShiftDefinition } from '../types';
+import type { Staff, ScheduledShift, ShiftDefinition, Team } from '../types';
 import { UNASSIGNED_STAFF_ID } from '../constants';
 import { ShiftTime, StaffRole, ContractType } from '../types';
 import { getAllowedShifts } from '../utils/shiftUtils';
@@ -11,6 +12,7 @@ interface ShiftCalendarProps {
     staffList: Staff[];
     scheduledShifts: ScheduledShift[];
     shiftDefinitions: ShiftDefinition[];
+    teams: Team[];
     onUncoveredShiftClick: (shift: ScheduledShift) => void;
     currentUser: Staff;
     onUpdateShift: (staffId: string, date: string, newShiftCode: string) => void;
@@ -22,12 +24,13 @@ interface ShiftCellProps {
     staff: Staff;
     date: string;
     shiftDefinitions: ShiftDefinition[];
+    teams: Team[];
     currentUser: Staff;
     onUncoveredShiftClick: (shift: ScheduledShift) => void;
     onUpdateShift: (staffId: string, date: string, newShiftCode: string) => void;
 }
 
-const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, shiftDefinitions, currentUser, onUncoveredShiftClick, onUpdateShift }) => {
+const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, shiftDefinitions, teams, currentUser, onUncoveredShiftClick, onUpdateShift }) => {
     const isHeadNurse = currentUser.role === StaffRole.HeadNurse;
     const isUnassignedShift = shift?.staffId === UNASSIGNED_STAFF_ID;
 
@@ -86,7 +89,7 @@ const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, shiftDefiniti
 
     // Head Nurse: Editable dropdown for everyone
     if (isHeadNurse) {
-        const allowedShifts = getAllowedShifts(staff, shiftDefinitions);
+        const allowedShifts = getAllowedShifts(staff, shiftDefinitions, teams);
         const selectClasses = `w-full h-full text-xs font-bold rounded-sm cursor-pointer appearance-none text-center border-none focus:ring-2 focus:ring-indigo-500 ${cellBg} ${cellTextColor}`;
         
         return (
@@ -121,7 +124,7 @@ const ShiftCell: React.FC<ShiftCellProps> = ({ shift, staff, date, shiftDefiniti
 };
 
 
-export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staffList, scheduledShifts, shiftDefinitions, onUncoveredShiftClick, currentUser, onUpdateShift, onOpenStaffDetail }) => {
+export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staffList, scheduledShifts, shiftDefinitions, teams, onUncoveredShiftClick, currentUser, onUpdateShift, onOpenStaffDetail }) => {
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -197,6 +200,7 @@ export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staff
                                             staff={staff}
                                             date={dateStr}
                                             shiftDefinitions={shiftDefinitions}
+                                            teams={teams}
                                             currentUser={currentUser}
                                             onUncoveredShiftClick={onUncoveredShiftClick}
                                             onUpdateShift={onUpdateShift}
@@ -227,6 +231,7 @@ export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staff
                                                     staff={unassignedStaff}
                                                     date={dateStr}
                                                     shiftDefinitions={shiftDefinitions}
+                                                    teams={teams}
                                                     currentUser={currentUser}
                                                     onUncoveredShiftClick={onUncoveredShiftClick}
                                                     onUpdateShift={onUpdateShift}

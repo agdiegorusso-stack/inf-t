@@ -1,7 +1,6 @@
-
-import { useState, useCallback, useMemo } from 'react';
-import { STAFF_LIST, SHIFT_DEFINITIONS as INITIAL_SHIFT_DEFINITIONS, UNASSIGNED_STAFF_ID } from '../constants';
-import type { Staff, ScheduledShift, Absence, ShiftDefinition, ReplacementOption, ContractType, StaffRole } from '../types';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import { STAFF_LIST, SHIFT_DEFINITIONS as INITIAL_SHIFT_DEFINITIONS, UNASSIGNED_STAFF_ID, TEAMS_LIST } from '../constants';
+import type { Staff, ScheduledShift, Absence, ShiftDefinition, ReplacementOption, Team, Location } from '../types';
 import { ShiftTime, ContractType as ContractEnum, StaffRole as RoleEnum } from '../types';
 import { isShiftAllowed } from '../utils/shiftUtils';
 
@@ -17,19 +16,17 @@ const generateInitialSchedule = (): ScheduledShift[] => {
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const restShifts = ['RS', 'S', 'R'];
 
-    const allShiftDefinitions = [...INITIAL_SHIFT_DEFINITIONS]; // In this initial generation, we only use the base shifts
+    const allShiftDefinitions = [...INITIAL_SHIFT_DEFINITIONS]; 
 
     STAFF_LIST.forEach(staff => {
-        // Don't generate shifts for the unassigned placeholder
         if (staff.id === UNASSIGNED_STAFF_ID) return;
 
-        // Get a list of working shifts that are ALLOWED for this specific staff member
         const allowedWorkingShifts = allShiftDefinitions
             .filter(def => 
                 def.time !== ShiftTime.Absence && 
                 def.time !== ShiftTime.Rest && 
                 def.time !== ShiftTime.OffShift &&
-                isShiftAllowed(def.code, staff, allShiftDefinitions)
+                isShiftAllowed(def.code, staff, allShiftDefinitions, TEAMS_LIST)
             )
             .map(def => def.code);
 
@@ -45,13 +42,11 @@ const generateInitialSchedule = (): ScheduledShift[] => {
             } else if (date.getDay() === 0 || date.getDay() === 6) { // Weekend
                 shiftCode = 'RS';
             } else if (allowedWorkingShifts.length > 0) {
-                 // Pick a random shift from the allowed list
                  shiftCode = allowedWorkingShifts[Math.floor(Math.random() * allowedWorkingShifts.length)];
             } else {
-                 // Fallback to rest if no working shifts are possible for this role
                  shiftCode = 'R';
             }
-             if (Math.random() < 0.05) { // 5% chance of being on holiday
+             if (Math.random() < 0.05) {
                  shiftCode = 'FE';
              }
 
@@ -70,20 +65,70 @@ const generateInitialSchedule = (): ScheduledShift[] => {
 
 export const useShiftData = () => {
     const [staff, setStaff] = useState<Staff[]>(() => {
-        try {
-            const storedStaff = localStorage.getItem('staffListStorage');
-            if (storedStaff) {
-                return JSON.parse(storedStaff);
+        const storedStaff = localStorage.getItem('staffListStorage');
+        if (storedStaff) {
+            try {
+                const parsed = JSON.parse(storedStaff);
+                if (Array.isArray(parsed)) {
+                    return parsed;
+                }
+            } catch (e) {
+                console.error("Found corrupted staff list in localStorage, starting with default.", e);
+                return STAFF_LIST;
             }
-        } catch (e) {
-            console.error("Failed to load staff list from localStorage", e);
         }
-        // Fallback to initial list and save it
+        // If storage is empty, this is the first run. Initialize it.
         localStorage.setItem('staffListStorage', JSON.stringify(STAFF_LIST));
         return STAFF_LIST;
     });
-    const [scheduledShifts, setScheduledShifts] = useState<ScheduledShift[]>(generateInitialSchedule());
-    const [absences, setAbsences] = useState<Absence[]>([]);
+
+    const [teams, setTeams] = useState<Team[]>(() => {
+        const storedTeams = localStorage.getItem('teamsListStorage');
+        if (storedTeams) {
+            try {
+                const parsed = JSON.parse(storedTeams);
+                if (Array.isArray(parsed)) {
+                    return parsed;
+                }
+            } catch (e) {
+                console.error("Found corrupted teams list in localStorage, starting with default.", e);
+                return TEAMS_LIST;
+            }
+        }
+        // First run
+        localStorage.setItem('teamsListStorage', JSON.stringify(TEAMS_LIST));
+        return TEAMS_LIST;
+    });
+
+    const [scheduledShifts, setScheduledShifts] = useState<ScheduledShift[]>(() => {
+        try {
+            const storedShifts = localStorage.getItem('scheduledShiftsStorage');
+            if (storedShifts && storedShifts !== 'undefined') {
+                const parsed = JSON.parse(storedShifts);
+                if (Array.isArray(parsed)) {
+                    return parsed;
+                }
+            }
+        } catch (e) {
+            console.error("Failed to load/parse scheduled shifts from localStorage", e);
+        }
+        return generateInitialSchedule();
+    });
+
+    const [absences, setAbsences] = useState<Absence[]>(() => {
+        try {
+            const storedAbsences = localStorage.getItem('absencesStorage');
+            if (storedAbsences && storedAbsences !== 'undefined') {
+                const parsed = JSON.parse(storedAbsences);
+                if (Array.isArray(parsed)) {
+                    return parsed;
+                }
+            }
+        } catch (e) {
+            console.error("Failed to load/parse absences from localStorage", e);
+        }
+        return [];
+    });
 
     const [shiftDefinitions, setShiftDefinitions] = useState<ShiftDefinition[]>(() => {
         try {
@@ -93,13 +138,10 @@ export const useShiftData = () => {
             const userShifts = userShiftsData ? JSON.parse(userShiftsData) : [];
             const deletedCodes = deletedCodesData ? JSON.parse(deletedCodesData) : [];
             
-            // Start with initial shifts, but filter out the deleted ones.
             const baseShifts = INITIAL_SHIFT_DEFINITIONS.filter(s => !deletedCodes.includes(s.code));
 
-            // Now, combine with user-defined shifts, which can override base shifts.
             const combinedShifts = [...baseShifts, ...userShifts];
 
-            // Remove duplicates by code, user-defined shifts override initial ones
             const uniqueShifts = Array.from(new Map(combinedShifts.map(s => [s.code, s])).values());
             return uniqueShifts;
         } catch (e) {
@@ -107,17 +149,76 @@ export const useShiftData = () => {
             return INITIAL_SHIFT_DEFINITIONS;
         }
     });
+    
+    useEffect(() => {
+        try {
+            localStorage.setItem('scheduledShiftsStorage', JSON.stringify(scheduledShifts));
+        } catch (e) {
+            console.error("Failed to save scheduled shifts to localStorage", e);
+        }
+    }, [scheduledShifts]);
 
-    const shiftDefMap = useMemo(() => {
-        return new Map(shiftDefinitions.map(def => [def.code, def]));
-    }, [shiftDefinitions]);
+    useEffect(() => {
+        try {
+            localStorage.setItem('absencesStorage', JSON.stringify(absences));
+        } catch (e) {
+            console.error("Failed to save absences to localStorage", e);
+        }
+    }, [absences]);
 
-    const staffMap = useMemo(() => {
-        return new Map(staff.map(s => [s.id, s]));
-    }, [staff]);
+
+    const shiftDefMap = useMemo(() => new Map(shiftDefinitions.map(def => [def.code, def])), [shiftDefinitions]);
+    const staffMap = useMemo(() => new Map(staff.map(s => [s.id, s])), [staff]);
+    const teamsMap = useMemo(() => new Map(teams.map(t => [t.id, t])), [teams]);
 
     const getStaffById = useCallback((id: string) => staffMap.get(id), [staffMap]);
     const getShiftDefinitionByCode = useCallback((code: string) => shiftDefMap.get(code), [shiftDefMap]);
+    const getTeamById = useCallback((id: string) => teamsMap.get(id), [teamsMap]);
+
+    const getStaffAllowedLocations = useCallback((staffMember: Staff): Location[] => {
+        if (!staffMember?.teamIds) return [];
+        const locationsSet = new Set<Location>();
+        staffMember.teamIds.forEach(teamId => {
+            const team = getTeamById(teamId);
+            if (team) {
+                team.locations.forEach(loc => locationsSet.add(loc));
+            }
+        });
+        return Array.from(locationsSet);
+    }, [getTeamById]);
+
+    const addTeam = useCallback((newTeam: Team) => {
+        setTeams(prev => {
+            const updated = [...prev, newTeam];
+            localStorage.setItem('teamsListStorage', JSON.stringify(updated));
+            return updated;
+        });
+    }, []);
+
+    const updateTeam = useCallback((teamId: string, updates: Partial<Omit<Team, 'id'>>) => {
+        setTeams(prev => {
+            const updated = prev.map(t => t.id === teamId ? { ...t, ...updates } : t);
+            localStorage.setItem('teamsListStorage', JSON.stringify(updated));
+            return updated;
+        });
+    }, []);
+
+    const deleteTeam = useCallback((teamId: string) => {
+        setStaff(prevStaff => {
+            const updatedStaff = prevStaff.map(s => ({
+                ...s,
+                teamIds: s.teamIds ? s.teamIds.filter(id => id !== teamId) : []
+            }));
+            localStorage.setItem('staffListStorage', JSON.stringify(updatedStaff));
+            return updatedStaff;
+        });
+        
+        setTeams(prev => {
+            const updated = prev.filter(t => t.id !== teamId);
+            localStorage.setItem('teamsListStorage', JSON.stringify(updated));
+            return updated;
+        });
+    }, []);
 
     const addShiftDefinition = useCallback((newShift: ShiftDefinition) => {
         setShiftDefinitions(prev => {
@@ -190,10 +291,8 @@ export const useShiftData = () => {
             const userShifts = updated.filter(s => {
                 const initialShift = initialShiftMap.get(s.code);
                 if (!initialShift) {
-                    return true; // It's a new, user-created shift.
+                    return true;
                 }
-                // It's a shift that was originally a default shift.
-                // Check if it has been modified by comparing it to the original definition.
                 return JSON.stringify(s) !== JSON.stringify(initialShift);
             });
 
@@ -226,26 +325,23 @@ export const useShiftData = () => {
 
                 if (shiftIndex !== -1) {
                     const originalShift = updatedShifts[shiftIndex];
-                    const originalShiftCode = originalShift.shiftCode; // Capture code before any changes
+                    const originalShiftCode = originalShift.shiftCode;
                     const originalShiftDef = originalShiftCode ? getShiftDefinitionByCode(originalShiftCode) : null;
                     
-                    // If the original shift was a working shift, create an uncovered shift
                     if (originalShiftDef && originalShiftDef.time !== ShiftTime.Absence && originalShiftDef.time !== ShiftTime.Rest) {
                         const uncoveredShift: ScheduledShift = {
                             id: `uncovered-${originalShift.id}`,
                             date: originalShift.date,
                             staffId: UNASSIGNED_STAFF_ID,
-                            shiftCode: originalShiftCode, // Use the captured original code
+                            shiftCode: originalShiftCode,
                             originalStaffId: originalShift.staffId,
                         };
                         updatedShifts.push(uncoveredShift);
                     }
                     
-                    // Update the staff member's shift to the absence code
                     updatedShifts[shiftIndex] = { ...originalShift, shiftCode: reason };
 
                 } else {
-                    // If no shift existed, just add the absence
                      updatedShifts.push({
                         id: `${staffId}-${dateStr}`,
                         staffId,
@@ -264,54 +360,42 @@ export const useShiftData = () => {
         if (!uncoveredShiftDef) return [];
 
         const originalStaff = uncoveredShift.originalStaffId ? getStaffById(uncoveredShift.originalStaffId) : undefined;
-        // If we can't determine the original staff member's role, we can't find replacements.
-        // This could happen for a manually created uncovered shift, so we default to Nurse.
         const originalRole = originalStaff?.role ?? RoleEnum.Nurse;
 
         const replacements = staff
             .filter(s => {
-                // Exclude the person who is absent and the unassigned placeholder
                 if (s.id === uncoveredShift.originalStaffId || s.id === UNASSIGNED_STAFF_ID) {
                     return false;
                 }
 
-                // New role-based substitution rules
                 switch (originalRole) {
                     case RoleEnum.Nurse:
-                        // A Nurse can be replaced by another Nurse or a Head Nurse
                         if (s.role !== RoleEnum.Nurse && s.role !== RoleEnum.HeadNurse) return false;
                         break;
                     case RoleEnum.HeadNurse:
-                        // If the shift is not 'M', a Nurse can also substitute.
                         if (uncoveredShift.shiftCode !== 'M') {
-                            // Can be replaced by another Head Nurse or a Nurse
                             if (s.role !== RoleEnum.HeadNurse && s.role !== RoleEnum.Nurse) return false;
                         } else {
-                            // If the shift is 'M', only another Head Nurse can substitute.
                             if (s.role !== RoleEnum.HeadNurse) return false;
                         }
                         break;
                     case RoleEnum.OSS:
-                         // An OSS can only be replaced by another OSS
                         if (s.role !== RoleEnum.OSS) return false;
                         break;
                     case RoleEnum.Doctor:
-                         // A Doctor can only be replaced by another Doctor
                         if (s.role !== RoleEnum.Doctor) return false;
                         break;
                     default:
-                        // Deny any other combination
                         return false;
                 }
 
-                // Existing check: Exclude staff who are on leave, rest, or sick
                 const staffShiftOnDate = scheduledShifts.find(shift => shift.staffId === s.id && shift.date === uncoveredShift.date);
                 const staffShiftDef = staffShiftOnDate?.shiftCode ? getShiftDefinitionByCode(staffShiftOnDate.shiftCode) : null;
                 if (staffShiftDef && (staffShiftDef.time === ShiftTime.Absence || staffShiftDef.time === ShiftTime.Rest)) {
                     return false;
                 }
 
-                return true; // Staff is eligible
+                return true;
             })
             .map(s => {
                 const staffShiftOnDate = scheduledShifts.find(shift => shift.staffId === s.id && shift.date === uncoveredShift.date);
@@ -323,25 +407,23 @@ export const useShiftData = () => {
                 const canDoLongShift = s.contract === ContractEnum.H12 || s.contract === ContractEnum.H24;
 
                 if (canDoLongShift && staffShiftDef && staffShiftDef.time === ShiftTime.Morning && uncoveredShiftDef.time === ShiftTime.Afternoon) {
-                    priority = 2; // Highest priority
+                    priority = 2;
                     reason = "Può estendere il turno di mattina";
                 } else if (canDoLongShift && staffShiftDef && staffShiftDef.time === ShiftTime.Afternoon && uncoveredShiftDef.time === ShiftTime.Morning) {
-                    priority = 1; // High priority
+                    priority = 1;
                     reason = "Può anticipare il turno di pomeriggio";
                 } else if (!staffShiftDef) {
-                    priority = 0; // Standard priority
+                    priority = 0;
                 } else {
-                    // Staff is working another shift that day that cannot be combined
                     return null; 
                 }
 
-                // Bonus for department experience
-                if (s.usualLocations.includes(uncoveredShiftDef.location)) {
+                const staffAllowedLocations = getStaffAllowedLocations(s);
+                if (staffAllowedLocations.includes(uncoveredShiftDef.location)) {
                     reason += " (Esperto/a)";
                     priority += 0.5;
                 }
                 
-                // Small bonus for same-role replacement to act as a tie-breaker
                 if (s.role === originalRole) {
                     priority += 0.1;
                 }
@@ -352,7 +434,7 @@ export const useShiftData = () => {
             .sort((a, b) => b.priority - a.priority);
 
         return replacements;
-    }, [staff, scheduledShifts, getShiftDefinitionByCode, getStaffById]);
+    }, [staff, scheduledShifts, getShiftDefinitionByCode, getStaffById, getStaffAllowedLocations]);
     
     const assignShift = useCallback((shiftId: string, newStaffId: string) => {
         setScheduledShifts(prev => {
@@ -369,31 +451,26 @@ export const useShiftData = () => {
             const existingShiftIndex = shifts.findIndex(s => s.staffId === newStaffId && s.date === unassignedShift.date);
     
             if (existingShiftIndex !== -1) {
-                // Staff has a shift, try to combine
                 const existingShift = shifts[existingShiftIndex];
                 const existingShiftDef = existingShift.shiftCode ? getShiftDefinitionByCode(existingShift.shiftCode) : null;
     
                 if (existingShiftDef && (newStaff.contract === ContractEnum.H12 || newStaff.contract === ContractEnum.H24)) {
                     if (existingShiftDef.time === ShiftTime.Morning && unassignedShiftDef.time === ShiftTime.Afternoon) {
                         existingShift.shiftCode = `${existingShift.shiftCode}/${unassignedShift.shiftCode}`;
-                        shifts.splice(unassignedShiftIndex, 1); // remove unassigned
+                        shifts.splice(unassignedShiftIndex, 1);
                         return shifts;
                     }
                     if (existingShiftDef.time === ShiftTime.Afternoon && unassignedShiftDef.time === ShiftTime.Morning) {
                         existingShift.shiftCode = `${unassignedShift.shiftCode}/${existingShift.shiftCode}`;
-                        shifts.splice(unassignedShiftIndex, 1); // remove unassigned
+                        shifts.splice(unassignedShiftIndex, 1);
                         return shifts;
                     }
                 }
                 
-                // Cannot combine
                 alert(`${newStaff.name} è già impegnato/a in un turno non compatibile e non può coprire questo turno.`);
                 return prev;
             } else {
-                // Staff has no shift, just assign it
-                // Remove unassigned shift
                 shifts.splice(unassignedShiftIndex, 1);
-                // Add new shift
                 shifts.push({
                     ...unassignedShift,
                     staffId: newStaffId,
@@ -409,7 +486,6 @@ export const useShiftData = () => {
         setScheduledShifts(prevShifts => {
             let updatedShifts = [...prevShifts];
 
-            // Special logic for the "Turni Scoperti" row - no changes needed here
             if (staffId === UNASSIGNED_STAFF_ID) {
                 const newShiftDef = newShiftCode ? getShiftDefinitionByCode(newShiftCode) : null;
                 const isWorkShift = newShiftDef && newShiftDef.time !== ShiftTime.Absence && newShiftDef.time !== ShiftTime.Rest;
@@ -425,24 +501,19 @@ export const useShiftData = () => {
                 return updatedShifts;
             }
 
-            // Logic for regular staff members
             const shiftIndex = updatedShifts.findIndex(s => s.staffId === staffId && s.date === date);
 
-            // Get original shift info BEFORE any modifications
             const originalShift = shiftIndex !== -1 ? updatedShifts[shiftIndex] : null;
             const originalShiftCode = originalShift?.shiftCode || null;
             const originalShiftDef = originalShiftCode ? getShiftDefinitionByCode(originalShiftCode) : null;
             
-            // Get new shift info
             const newShiftDef = newShiftCode ? getShiftDefinitionByCode(newShiftCode) : null;
 
-            // Determine shift types
             const wasWorking = originalShiftDef && originalShiftDef.time !== ShiftTime.Absence && originalShiftDef.time !== ShiftTime.Rest;
             const isNowAbsence = newShiftDef && newShiftDef.time === ShiftTime.Absence;
             const wasAbsence = originalShiftDef && originalShiftDef.time === ShiftTime.Absence;
             const isNowWorking = newShiftDef && newShiftDef.time !== ShiftTime.Absence && newShiftDef.time !== ShiftTime.Rest;
 
-            // First, update the staff member's actual shift record
             if (shiftIndex !== -1) {
                 if (newShiftCode) {
                     updatedShifts[shiftIndex] = { ...updatedShifts[shiftIndex], shiftCode: newShiftCode };
@@ -457,24 +528,18 @@ export const useShiftData = () => {
                     shiftCode: newShiftCode
                 });
             }
-
-            // Now, handle the creation or resolution of a corresponding "uncovered" shift
             
-            // Case 1: An employee on a working shift is marked as absent.
-            // This should create a new "uncovered" shift.
             if (wasWorking && isNowAbsence) {
                 const uncoveredShift: ScheduledShift = {
-                    id: `uncovered-${originalShift!.id}`, // Use original shift ID for uniqueness
+                    id: `uncovered-${originalShift!.id}`,
                     date: originalShift!.date,
                     staffId: UNASSIGNED_STAFF_ID,
-                    shiftCode: originalShiftCode, // Use the original shift code that was captured before the update
+                    shiftCode: originalShiftCode,
                     originalStaffId: originalShift!.staffId,
                 };
                 updatedShifts.push(uncoveredShift);
             }
 
-            // Case 2: An employee who was absent is now assigned a working shift.
-            // This should resolve (delete) a previously created "uncovered" shift for them on that day.
             if (wasAbsence && isNowWorking) {
                 const uncoveredShiftIndex = updatedShifts.findIndex(s => 
                     s.staffId === UNASSIGNED_STAFF_ID &&
@@ -492,21 +557,16 @@ export const useShiftData = () => {
     }, [getShiftDefinitionByCode]);
 
     const overwriteSchedule = useCallback((newShifts: ScheduledShift[], targetMonth: string, affectedStaffIds: string[]) => {
-        // targetMonth è nel formato "YYYY-MM"
         const affectedStaffIdsSet = new Set(affectedStaffIds);
 
         setScheduledShifts(prevShifts => {
-            // 1. Rimuovi i vecchi turni per il personale interessato e il mese target.
-            // Questo include sia il personale regolare che UNASSIGNED_STAFF_ID per i turni scoperti.
             const remainingShifts = prevShifts.filter(shift => {
                 const isAffectedStaff = affectedStaffIdsSet.has(shift.staffId);
                 const isInTargetMonth = shift.date.startsWith(targetMonth);
                 
-                // Mantieni il turno se NON è per un membro dello staff interessato NEL mese target.
                 return !(isAffectedStaff && isInTargetMonth);
             });
 
-            // 2. Combina i turni rimanenti con i nuovi turni generati.
             const updatedSchedule = [...remainingShifts, ...newShifts];
             
             return updatedSchedule;
@@ -560,6 +620,7 @@ export const useShiftData = () => {
 
     return { 
         staff, 
+        teams,
         scheduledShifts, 
         shiftDefinitions,
         addAbsence, 
@@ -574,5 +635,9 @@ export const useShiftData = () => {
         deleteShiftDefinition,
         updateShiftDefinition,
         changePassword,
+        addTeam,
+        updateTeam,
+        deleteTeam,
+        getStaffAllowedLocations,
     };
 };

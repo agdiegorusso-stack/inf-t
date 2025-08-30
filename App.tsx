@@ -7,7 +7,7 @@ import { Legend } from './components/Legend';
 import { AbsenceModal } from './components/AbsenceModal';
 import { ReplacementModal } from './components/ReplacementModal';
 import { useShiftData } from './hooks/useShiftData';
-import type { ScheduledShift, Staff } from './types';
+import type { ScheduledShift, Staff, Team } from './types';
 import { ContractType, StaffRole } from './types';
 import { LoginScreen } from './components/LoginScreen';
 import { mockAuthenticateUser } from './services/authService';
@@ -19,7 +19,8 @@ export type ActiveTab = 'nurses' | 'oss' | 'doctors';
 
 const App: React.FC = () => {
     const { 
-        staff, 
+        staff,
+        teams, 
         scheduledShifts, 
         shiftDefinitions,
         addAbsence, 
@@ -34,6 +35,10 @@ const App: React.FC = () => {
         deleteShiftDefinition,
         updateShiftDefinition,
         changePassword,
+        addTeam,
+        updateTeam,
+        deleteTeam,
+        getStaffAllowedLocations,
     } = useShiftData();
 
     const [currentUser, setCurrentUser] = useState<Staff | null>(null);
@@ -124,6 +129,49 @@ const App: React.FC = () => {
         alert("Calendario turni generato e aggiornato con successo!");
     }, [overwriteSchedule, handleDateChange]);
 
+    const handleAddTeamAndMembers = useCallback((teamData: Omit<Team, 'id'>, memberIds: string[]) => {
+        const newTeam: Team = {
+            id: `team-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            ...teamData,
+        };
+        addTeam(newTeam);
+
+        memberIds.forEach(staffId => {
+            const staffMember = getStaffById(staffId);
+            if (staffMember) {
+                const updatedTeamIds = [...new Set([...(staffMember.teamIds || []), newTeam.id])];
+                updateStaffMember(staffId, { teamIds: updatedTeamIds });
+            }
+        });
+    }, [addTeam, getStaffById, updateStaffMember]);
+
+    const handleUpdateTeamAndMembers = useCallback((teamId: string, teamData: Partial<Omit<Team, 'id'>>, newMemberIds: string[]) => {
+        updateTeam(teamId, teamData);
+
+        const newMemberIdsSet = new Set(newMemberIds);
+        const originalMembers = staff.filter(s => s.teamIds?.includes(teamId));
+        const originalMemberIdsSet = new Set(originalMembers.map(s => s.id));
+
+        // Staff to be removed from the team
+        originalMembers.forEach(member => {
+            if (!newMemberIdsSet.has(member.id)) {
+                const updatedTeamIds = member.teamIds.filter(id => id !== teamId);
+                updateStaffMember(member.id, { teamIds: updatedTeamIds });
+            }
+        });
+
+        // Staff to be added to the team
+        newMemberIds.forEach(staffId => {
+            if (!originalMemberIdsSet.has(staffId)) {
+                const staffMember = getStaffById(staffId);
+                if (staffMember) {
+                    const updatedTeamIds = [...(staffMember.teamIds || []), teamId];
+                    updateStaffMember(staffId, { teamIds: updatedTeamIds });
+                }
+            }
+        });
+    }, [updateTeam, staff, updateStaffMember, getStaffById]);
+
     const replacements = useMemo(() => {
         if (!selectedShift) return [];
         return findReplacements(selectedShift);
@@ -203,6 +251,7 @@ const App: React.FC = () => {
                                     staffList={filteredStaff}
                                     scheduledShifts={scheduledShifts}
                                     shiftDefinitions={shiftDefinitions}
+                                    teams={teams}
                                     onUncoveredShiftClick={handleOpenReplacementModal}
                                     currentUser={currentUser}
                                     onUpdateShift={handleUpdateShift}
@@ -234,6 +283,7 @@ const App: React.FC = () => {
                         getShiftDefinitionByCode={getShiftDefinitionByCode}
                         scheduledShifts={scheduledShifts}
                         shiftDefinitions={shiftDefinitions}
+                        teams={teams}
                         onAddShift={addShiftDefinition}
                         deleteShiftDefinition={deleteShiftDefinition}
                         updateShiftDefinition={updateShiftDefinition}
@@ -245,6 +295,10 @@ const App: React.FC = () => {
                         staffList={staff}
                         onUpdateStaff={handleUpdateStaff}
                         shiftDefinitions={shiftDefinitions}
+                        teams={teams}
+                        onAddTeamAndMembers={handleAddTeamAndMembers}
+                        onUpdateTeamAndMembers={handleUpdateTeamAndMembers}
+                        onDeleteTeam={deleteTeam}
                     />
                 );
             default:
@@ -288,6 +342,7 @@ const App: React.FC = () => {
                     onClose={handleCloseModals}
                     onSave={handleUpdateStaff}
                     shiftDefinitions={shiftDefinitions}
+                    teams={teams}
                 />
             )}
         </div>

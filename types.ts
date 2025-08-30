@@ -40,12 +40,18 @@ export enum ShiftTime {
     Absence = 'Assenza'
 }
 
+export interface Team {
+    id: string;
+    name: string;
+    locations: Location[];
+}
+
 export interface Staff {
     id: string;
     name: string;
     role: StaffRole;
     contract: ContractType;
-    usualLocations: Location[];
+    teamIds: string[];
     phone?: string;
     email?: string;
     /** 

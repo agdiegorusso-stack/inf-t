@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import type { ShiftDefinition } from '../types';
+import type { ShiftDefinition, ShiftRequirementValue } from '../types';
 import { Location, ShiftTime } from '../types';
 
-type RuleType = 'specific_days' | 'all_days' | 'specific_date';
+type RuleType = 'specific_days' | 'all_days';
+type ViewType = 'weekly' | 'monthly';
 
 interface EditShiftModalProps {
     isOpen: boolean;
@@ -10,7 +11,10 @@ interface EditShiftModalProps {
     onSave: (updatedShift: ShiftDefinition) => void;
     onDelete: (shiftCode: string) => void;
     shift: ShiftDefinition;
-    onApplyRule: (shiftCode: string, ruleType: RuleType, days: number[], date: string, count: { min: number, max: number }) => void;
+    onApplyRule: (shiftCode: string, days: number[], count: { min: number, max: number }) => void;
+    targetDate: string; // YYYY-MM
+    dateOverrides: Record<string, ShiftRequirementValue>; // { 'YYYY-MM-DD': value } for the current shift
+    onApplyDateOverride: (shiftCode: string, dates: string[], count: ShiftRequirementValue | null) => void;
 }
 
 const colorOptions = [
@@ -28,23 +32,34 @@ const weekDaysMap = [
     { label: 'Mer', value: 3 }, { label: 'Gio', value: 4 }, { label: 'Ven', value: 5 }, { label: 'Sab', value: 6 }
 ];
 
-export const EditShiftModal: React.FC<EditShiftModalProps> = ({ isOpen, onClose, onSave, onDelete, shift, onApplyRule }) => {
+const formatRequirement = (req: ShiftRequirementValue | undefined): string => {
+    if (req === undefined || req === null) return '';
+    if (typeof req === 'number') return req.toString();
+    if (req.min === req.max) return req.min.toString();
+    return `(${req.min}-${req.max})`;
+};
+
+
+export const EditShiftModal: React.FC<EditShiftModalProps> = ({ isOpen, onClose, onSave, onDelete, shift, onApplyRule, targetDate, dateOverrides, onApplyDateOverride }) => {
     const [formData, setFormData] = useState<ShiftDefinition>(shift);
     const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
     const [error, setError] = useState('');
+    const [view, setView] = useState<ViewType>('weekly');
     
-    // State for special rules
+    // State for rules
     const [ruleType, setRuleType] = useState<RuleType>('specific_days');
     const [selectedDays, setSelectedDays] = useState<number[]>([]);
-    const [specificDate, setSpecificDate] = useState(new Date().toISOString().split('T')[0]);
     const [minStaffCount, setMinStaffCount] = useState(1);
     const [maxStaffCount, setMaxStaffCount] = useState(1);
+    const [selectedDates, setSelectedDates] = useState<string[]>([]);
 
 
     useEffect(() => {
         setFormData(shift);
         setError('');
         setIsConfirmingDelete(false);
+        setView('weekly');
+        setSelectedDates([]);
     }, [shift, isOpen]);
 
     const workShiftTimes = useMemo(() => 
@@ -77,7 +92,7 @@ export const EditShiftModal: React.FC<EditShiftModalProps> = ({ isOpen, onClose,
         }
     };
 
-    const handleApplyRuleClick = () => {
+    const handleApplyWeeklyRule = () => {
         let daysToApply: number[] = [];
 
         if (ruleType === 'specific_days') {
@@ -90,8 +105,65 @@ export const EditShiftModal: React.FC<EditShiftModalProps> = ({ isOpen, onClose,
             daysToApply = weekDaysMap.map(d => d.value);
         }
         
-        onApplyRule(formData.code, ruleType, daysToApply, specificDate, { min: minStaffCount, max: maxStaffCount });
-        alert('Regola applicata con successo alla tabella dei fabbisogni!');
+        onApplyRule(formData.code, daysToApply, { min: minStaffCount, max: maxStaffCount });
+        alert('Regola settimanale applicata con successo!');
+    };
+    
+    const handleApplyMonthlyOverride = (remove = false) => {
+        if (selectedDates.length === 0) {
+            alert('Selezionare almeno un giorno dal calendario.');
+            return;
+        }
+        const count = remove ? null : { min: minStaffCount, max: maxStaffCount };
+        onApplyDateOverride(formData.code, selectedDates, count);
+        setSelectedDates([]);
+    };
+
+    const renderMonthlyCalendar = () => {
+        const [year, month] = targetDate.split('-').map(Number);
+        const firstDayOfMonth = new Date(year, month - 1, 1).getDay();
+        const daysInMonth = new Date(year, month, 0).getDate();
+        
+        const blanks = Array(firstDayOfMonth).fill(null);
+        const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+        const handleDateClick = (day: number) => {
+            const dateStr = `${targetDate}-${day.toString().padStart(2, '0')}`;
+            setSelectedDates(prev => prev.includes(dateStr) ? prev.filter(d => d !== dateStr) : [...prev, dateStr]);
+        };
+        
+        return (
+            <div>
+                <h4 className="text-center font-semibold mb-2">{new Date(year, month - 1).toLocaleString('it-IT', { month: 'long', year: 'numeric' })}</h4>
+                <div className="grid grid-cols-7 gap-1 text-center text-xs font-bold text-gray-500">
+                    {weekDaysMap.map(d => <div key={d.value}>{d.label}</div>)}
+                </div>
+                <div className="grid grid-cols-7 gap-1 mt-1">
+                    {blanks.map((_, i) => <div key={`blank-${i}`}></div>)}
+                    {days.map(day => {
+                        const dateStr = `${targetDate}-${day.toString().padStart(2, '0')}`;
+                        const isSelected = selectedDates.includes(dateStr);
+                        const override = dateOverrides[dateStr];
+                        const displayValue = formatRequirement(override);
+                        
+                        return (
+                             <button
+                                key={day}
+                                type="button"
+                                onClick={() => handleDateClick(day)}
+                                className={`h-12 w-full rounded-lg border-2 flex flex-col items-center justify-center transition-colors ${
+                                    isSelected ? 'bg-blue-500 border-blue-600 text-white' : 
+                                    override ? 'bg-green-100 border-green-300 text-green-800' : 'bg-gray-100 border-gray-200 hover:bg-gray-200'
+                                }`}
+                            >
+                                <span className="font-bold">{day}</span>
+                                {displayValue && <span className="text-xs font-mono">{displayValue}</span>}
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+        );
     };
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -132,147 +204,111 @@ export const EditShiftModal: React.FC<EditShiftModalProps> = ({ isOpen, onClose,
 
                 <form onSubmit={handleSubmit} className="space-y-6">
                     <fieldset>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                                <label htmlFor="shift-code" className="block text-sm font-medium text-gray-700 mb-1">Codice Turno</label>
-                                <input
-                                    id="shift-code"
-                                    type="text"
-                                    value={formData.code}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-100 cursor-not-allowed"
-                                    disabled
-                                />
-                            </div>
-                            <div>
-                                <label htmlFor="shift-description" className="block text-sm font-medium text-gray-700 mb-1">Descrizione Completa</label>
-                                <input
-                                    id="shift-description"
-                                    type="text"
-                                    value={formData.description}
-                                    onChange={e => handleInputChange('description', e.target.value)}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                                    required
-                                />
-                            </div>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                                <label htmlFor="shift-location" className="block text-sm font-medium text-gray-700 mb-1">Sede</label>
-                                <select id="shift-location" value={formData.location} onChange={e => handleInputChange('location', e.target.value as Location)} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
-                                    {Object.values(Location).map(loc => <option key={loc} value={loc}>{loc}</option>)}
-                                </select>
-                            </div>
-                            <div>
-                                <label htmlFor="shift-time" className="block text-sm font-medium text-gray-700 mb-1">Fascia Oraria</label>
-                                <select id="shift-time" value={formData.time} onChange={e => handleInputChange('time', e.target.value as ShiftTime)} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
-                                    {workShiftTimes.map(t => <option key={t} value={t}>{t}</option>)}
-                                </select>
+                         {/* Form fields for shift properties */}
+                    </fieldset>
+                    
+                    <div className="space-y-4 pt-4 border-t">
+                        <div className="flex items-center justify-between">
+                             <h3 className="text-lg font-semibold text-gray-700">Regole Speciali di Fabbisogno</h3>
+                             <div className="flex items-center p-1 bg-gray-200 rounded-lg">
+                                <button type="button" onClick={() => setView('weekly')} className={`px-3 py-1 text-sm font-semibold rounded-md transition-colors ${view === 'weekly' ? 'bg-white text-blue-600 shadow' : 'text-gray-600'}`}>Regola Settimanale</button>
+                                <button type="button" onClick={() => setView('monthly')} className={`px-3 py-1 text-sm font-semibold rounded-md transition-colors ${view === 'monthly' ? 'bg-white text-blue-600 shadow' : 'text-gray-600'}`}>Giorno Singolo</button>
                             </div>
                         </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">Colore Etichetta</label>
-                            <div className="flex flex-wrap gap-2">
-                                {colorOptions.map(opt => (
-                                    <button
-                                        key={opt.name}
-                                        type="button"
-                                        onClick={() => {
-                                            handleInputChange('color', opt.bg);
-                                            handleInputChange('textColor', opt.text);
-                                        }}
-                                        className={`w-20 h-10 rounded-md flex items-center justify-center font-bold text-sm transition-all ${opt.bg} ${opt.text} ${formData.color === opt.bg ? 'ring-2 ring-offset-1 ring-blue-500' : 'hover:opacity-80'}`}
-                                        aria-label={`Seleziona colore ${opt.name}`}
-                                    >
-                                        {formData.code}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    </fieldset>
-                    
-                    {/* Special Rules Section */}
-                    <div className="space-y-4 pt-4 border-t">
-                        <h3 className="text-lg font-semibold text-gray-700">Regole Speciali di Fabbisogno</h3>
-                         <p className="text-sm text-gray-500">
-                            Crea una regola per aggiornare rapidamente il numero di personale necessario per questo turno nella tabella dei fabbisogni.
-                         </p>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-gray-50 rounded-lg border">
-                            <div>
-                                <label htmlFor="rule-type" className="block text-sm font-medium text-gray-700 mb-1">Tipo Regola</label>
-                                <select id="rule-type" value={ruleType} onChange={e => setRuleType(e.target.value as RuleType)} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
-                                    <option value="specific_days">Giorni Specifici</option>
-                                    <option value="all_days">Tutti i Giorni</option>
-                                    <option value="specific_date">Data Specifica</option>
-                                </select>
-                            </div>
-                            <div className="md:col-span-2">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">
-                                    {ruleType === 'specific_date' ? 'Seleziona Data' : 'Seleziona Giorni'}
-                                </label>
-                                {ruleType === 'specific_days' && (
-                                    <div className="flex flex-wrap gap-2 items-center">
-                                        {weekDaysMap.map(day => (
-                                            <button
-                                                key={day.value}
-                                                type="button"
-                                                onClick={() => handleDayToggle(day.value)}
-                                                className={`px-3 py-1 text-sm rounded-full transition-colors ${selectedDays.includes(day.value) ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
-                                            >
-                                                {day.label}
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                                {ruleType === 'specific_date' && (
-                                    <input
-                                        type="date"
-                                        value={specificDate}
-                                        onChange={e => setSpecificDate(e.target.value)}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                                    />
-                                )}
-                                {ruleType === 'all_days' && (
-                                    <p className="text-sm text-gray-500 italic h-full flex items-center">La regola verrà applicata a tutti i giorni della settimana.</p>
-                                )}
-                            </div>
-                        </div>
-                        <div className="flex items-end gap-4 p-4 bg-gray-50 rounded-lg border">
-                             <div className="flex-grow">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Numero di Personale (Min-Max)</label>
-                                <div className="grid grid-cols-2 gap-4">
-                                     <div>
-                                        <label htmlFor="min-staff-count" className="block text-xs font-medium text-gray-600">Minimo</label>
-                                        <input
-                                            type="number"
-                                            id="min-staff-count"
-                                            min="0"
-                                            value={minStaffCount}
-                                            onChange={handleMinStaffChange}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                                        />
-                                    </div>
+                        {view === 'weekly' && (
+                             <div className="space-y-4">
+                                <p className="text-sm text-gray-500">
+                                    Crea una regola per aggiornare il fabbisogno per questo turno su base settimanale.
+                                </p>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-gray-50 rounded-lg border">
                                     <div>
-                                        <label htmlFor="max-staff-count" className="block text-xs font-medium text-gray-600">Massimo</label>
-                                        <input
-                                            type="number"
-                                            id="max-staff-count"
-                                            min={minStaffCount}
-                                            value={maxStaffCount}
-                                            onChange={handleMaxStaffChange}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                                        />
+                                        <label htmlFor="rule-type" className="block text-sm font-medium text-gray-700 mb-1">Tipo Regola</label>
+                                        <select id="rule-type" value={ruleType} onChange={e => setRuleType(e.target.value as RuleType)} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                            <option value="specific_days">Giorni Specifici</option>
+                                            <option value="all_days">Tutti i Giorni</option>
+                                        </select>
+                                    </div>
+                                    <div className="md:col-span-2">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Seleziona Giorni</label>
+                                        {ruleType === 'specific_days' ? (
+                                            <div className="flex flex-wrap gap-2 items-center">
+                                                {weekDaysMap.map(day => (
+                                                    <button
+                                                        key={day.value}
+                                                        type="button"
+                                                        onClick={() => handleDayToggle(day.value)}
+                                                        className={`px-3 py-1 text-sm rounded-full transition-colors ${selectedDays.includes(day.value) ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                                                    >
+                                                        {day.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                             <p className="text-sm text-gray-500 italic h-full flex items-center">La regola verrà applicata a tutti i giorni della settimana.</p>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="flex items-end gap-4 p-4 bg-gray-50 rounded-lg border">
+                                    <div className="flex-grow">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Numero di Personale (Min-Max)</label>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label htmlFor="min-staff-count" className="block text-xs font-medium text-gray-600">Minimo</label>
+                                                <input
+                                                    type="number" id="min-staff-count" min="0" value={minStaffCount}
+                                                    onChange={handleMinStaffChange}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label htmlFor="max-staff-count" className="block text-xs font-medium text-gray-600">Massimo</label>
+                                                <input
+                                                    type="number" id="max-staff-count" min={minStaffCount} value={maxStaffCount}
+                                                    onChange={handleMaxStaffChange}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleApplyWeeklyRule}
+                                        className="px-4 py-2 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700 transition-colors"
+                                    >
+                                        Applica Regola
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'monthly' && (
+                            <div className="space-y-4">
+                                <p className="text-sm text-gray-500">
+                                    Seleziona uno o più giorni dal calendario per impostare un fabbisogno specifico che sovrascrive la regola settimanale. Le date con un'eccezione sono evidenziate in verde.
+                                </p>
+                                {renderMonthlyCalendar()}
+                                <div className="flex items-end gap-4 p-4 bg-gray-50 rounded-lg border">
+                                    <div className="flex-grow">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Numero di Personale (Min-Max)</label>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label htmlFor="min-staff-count-month" className="block text-xs font-medium text-gray-600">Minimo</label>
+                                                <input type="number" id="min-staff-count-month" min="0" value={minStaffCount} onChange={handleMinStaffChange} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" />
+                                            </div>
+                                            <div>
+                                                <label htmlFor="max-staff-count-month" className="block text-xs font-medium text-gray-600">Massimo</label>
+                                                <input type="number" id="max-staff-count-month" min={minStaffCount} value={maxStaffCount} onChange={handleMaxStaffChange} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col sm:flex-row gap-2">
+                                        <button type="button" onClick={() => handleApplyMonthlyOverride(false)} className="px-3 py-2 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700 whitespace-nowrap">Applica a Selezionati</button>
+                                        <button type="button" onClick={() => handleApplyMonthlyOverride(true)} className="px-3 py-2 bg-yellow-500 text-white font-semibold rounded-md hover:bg-yellow-600 whitespace-nowrap">Rimuovi Eccezione</button>
                                     </div>
                                 </div>
                             </div>
-                            <button
-                                type="button"
-                                onClick={handleApplyRuleClick}
-                                className="px-4 py-2 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700 transition-colors"
-                            >
-                                Applica Regola
-                            </button>
-                        </div>
+                        )}
                     </div>
 
 

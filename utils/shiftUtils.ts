@@ -1,22 +1,9 @@
 
 
 
-import { ContractType, ShiftTime, ShiftDefinition, StaffRole, Staff, Team, Location } from '../types';
+
+import { ContractType, ShiftTime, ShiftDefinition, StaffRole, Staff, Team } from '../types';
 import { LONG_SHIFTS } from '../constants';
-
-const getStaffAllowedLocations = (staffMember: Staff, teams: Team[]): Location[] => {
-    if (!staffMember.teamIds || !teams) return [];
-    const teamsMap = new Map(teams.map(t => [t.id, t]));
-    const locationsSet = new Set<Location>();
-    staffMember.teamIds.forEach(teamId => {
-        const team = teamsMap.get(teamId);
-        if (team) {
-            team.locations.forEach(loc => locationsSet.add(loc));
-        }
-    });
-    return Array.from(locationsSet);
-};
-
 
 /**
  * Checks if a specific shift is allowed for a given staff member based on role, contract, and individual preferences.
@@ -40,14 +27,21 @@ export const isShiftAllowed = (shiftCode: string, staff: Staff, shiftDefinitions
         return shiftDef.roles.includes(role);
     }
     
-    const allowedLocations = getStaffAllowedLocations(staff, teams);
-    if (!allowedLocations.includes(shiftDef.location)) {
+    // NEW LOGIC: Check if any of the staff's teams allow this specific shift code.
+    // This is more precise than checking locations.
+    const staffTeams = teams.filter(t => staff.teamIds?.includes(t.id));
+    if (staffTeams.length === 0) {
+        return false; // No team means no allowed shifts.
+    }
+
+    const isAllowedByAnyTeam = staffTeams.some(team => team.allowedShiftCodes?.includes(shiftCode));
+    if (!isAllowedByAnyTeam) {
         return false;
     }
 
     if (!shiftDef.roles.includes(role)) {
         if (role === StaffRole.HeadNurse && shiftDef.roles.includes(StaffRole.Nurse)) {
-            // Allowed
+            // Head nurses can cover nurse shifts.
         } else {
             return false;
         }

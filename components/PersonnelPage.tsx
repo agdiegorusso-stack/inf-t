@@ -1,4 +1,5 @@
 
+
 import React, { useState, useMemo, useCallback } from 'react';
 import type { Staff, ShiftDefinition, Team } from '../types';
 import { StaffRole } from '../types';
@@ -98,6 +99,7 @@ export const PersonnelPage: React.FC<PersonnelPageProps> = ({ staffList, onUpdat
                 <TeamManagement 
                     teams={teams}
                     staffList={staffList}
+                    shiftDefinitions={shiftDefinitions}
                     onAddTeamAndMembers={onAddTeamAndMembers}
                     onUpdateTeamAndMembers={onUpdateTeamAndMembers}
                     onDeleteTeam={onDeleteTeam}

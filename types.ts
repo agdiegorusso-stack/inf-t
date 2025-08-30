@@ -44,6 +44,7 @@ export interface Team {
     id: string;
     name: string;
     locations: Location[];
+    allowedShiftCodes?: string[];
 }
 
 export interface Staff {

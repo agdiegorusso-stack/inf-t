@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import type { Team, Staff } from '../types';
-import { Location, StaffRole } from '../types';
+import type { Team, Staff, ShiftDefinition } from '../types';
+import { Location, StaffRole, ShiftTime } from '../types';
 import { UNASSIGNED_STAFF_ID } from '../constants';
 
 interface TeamModalProps {
@@ -11,18 +11,21 @@ interface TeamModalProps {
     existingTeam: Team | null;
     allTeams: Team[];
     staffList: Staff[];
+    shiftDefinitions: ShiftDefinition[];
 }
 
-export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSave, existingTeam, allTeams, staffList }) => {
+export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSave, existingTeam, allTeams, staffList, shiftDefinitions }) => {
     const [name, setName] = useState('');
     const [selectedLocations, setSelectedLocations] = useState<Location[]>([]);
     const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+    const [selectedShiftCodes, setSelectedShiftCodes] = useState<string[]>([]);
     const [error, setError] = useState('');
 
     useEffect(() => {
         if (existingTeam) {
             setName(existingTeam.name);
             setSelectedLocations(existingTeam.locations);
+            setSelectedShiftCodes(existingTeam.allowedShiftCodes || []);
             const currentMemberIds = staffList
                 .filter(s => s.teamIds?.includes(existingTeam.id))
                 .map(s => s.id);
@@ -31,15 +34,45 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSave, e
             setName('');
             setSelectedLocations([]);
             setSelectedMemberIds([]);
+            setSelectedShiftCodes([]);
         }
         setError('');
     }, [existingTeam, isOpen, staffList]);
 
+    const shiftsByLocation = useMemo(() => {
+        const grouped = new Map<Location, ShiftDefinition[]>();
+        const workShifts = shiftDefinitions.filter(s => 
+            s.time !== ShiftTime.Absence && 
+            s.time !== ShiftTime.Rest && 
+            s.time !== ShiftTime.OffShift
+        ).sort((a,b) => a.description.localeCompare(b.description));
+
+        for (const shift of workShifts) {
+            if (!grouped.has(shift.location)) {
+                grouped.set(shift.location, []);
+            }
+            grouped.get(shift.location)!.push(shift);
+        }
+        return Array.from(grouped.entries()).sort((a,b) => a[0].localeCompare(b[0]));
+    }, [shiftDefinitions]);
+
+
     const handleLocationToggle = (location: Location) => {
+        const isAdding = !selectedLocations.includes(location);
+
+        if (!isAdding) {
+            // Se si rimuove una sede, deselezionare anche i turni associati
+            const shiftsInLocation = shiftsByLocation
+                .find(([loc, _]) => loc === location)?.[1]
+                .map(s => s.code) || [];
+            
+            setSelectedShiftCodes(prev => prev.filter(code => !shiftsInLocation.includes(code)));
+        }
+
         setSelectedLocations(prev =>
-            prev.includes(location)
-                ? prev.filter(l => l !== location)
-                : [...prev, location]
+            isAdding
+                ? [...prev, location]
+                : prev.filter(l => l !== location)
         );
     };
 
@@ -48,6 +81,14 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSave, e
             prev.includes(staffId)
                 ? prev.filter(id => id !== staffId)
                 : [...prev, staffId]
+        );
+    };
+
+    const handleShiftToggle = (shiftCode: string) => {
+        setSelectedShiftCodes(prev =>
+            prev.includes(shiftCode)
+                ? prev.filter(code => code !== shiftCode)
+                : [...prev, shiftCode]
         );
     };
 
@@ -73,6 +114,12 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSave, e
             doctors: grouped[StaffRole.Doctor].sort((a, b) => a.name.localeCompare(b.name)),
         };
     }, [staffList]);
+    
+    const availableShiftsByLocation = useMemo(() => {
+        return shiftsByLocation.filter(([location, _]) => 
+            selectedLocations.includes(location)
+        );
+    }, [shiftsByLocation, selectedLocations]);
 
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -99,7 +146,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSave, e
             return;
         }
 
-        onSave({ name: trimmedName, locations: selectedLocations }, selectedMemberIds);
+        onSave({ name: trimmedName, locations: selectedLocations, allowedShiftCodes: selectedShiftCodes }, selectedMemberIds);
     };
 
     if (!isOpen) return null;
@@ -126,7 +173,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSave, e
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-            <div className="bg-white rounded-lg shadow-2xl p-6 sm:p-8 w-full max-w-4xl transform transition-all" onClick={e => e.stopPropagation()}>
+            <div className="bg-white rounded-lg shadow-2xl p-6 sm:p-8 w-full max-w-5xl transform transition-all" onClick={e => e.stopPropagation()}>
                 <div className="flex justify-between items-center mb-6">
                     <h2 className="text-2xl font-bold text-gray-800">
                         {existingTeam ? 'Modifica Team' : 'Nuovo Team'}
@@ -139,7 +186,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSave, e
                 </div>
                 {error && <p className="text-red-500 bg-red-100 p-3 rounded-md mb-4 text-sm">{error}</p>}
                 <form onSubmit={handleSubmit} className="space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-h-[65vh] overflow-y-auto pr-3">
                         <div className="space-y-6">
                              <div>
                                 <label htmlFor="team-name" className="block text-sm font-medium text-gray-700 mb-1">Nome Team</label>
@@ -154,7 +201,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSave, e
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-2">Sedi di Competenza</label>
-                                <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto p-4 border rounded-md bg-gray-50">
+                                <div className="grid grid-cols-1 gap-3 max-h-60 overflow-y-auto p-4 border rounded-md bg-gray-50">
                                     {Object.values(Location).map(loc => (
                                         <div key={loc} className="flex items-center">
                                             <input
@@ -172,8 +219,46 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSave, e
                         </div>
 
                         <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">Turni di Competenza</label>
+                            <div className="space-y-4 h-full overflow-y-auto p-4 border rounded-md bg-gray-50">
+                                {selectedLocations.length === 0 ? (
+                                    <div className="flex items-center justify-center h-full">
+                                       <p className="text-sm text-gray-500 text-center italic">Seleziona prima una Sede per visualizzare i turni associati.</p>
+                                    </div>
+                                ) : availableShiftsByLocation.length === 0 ? (
+                                    <div className="flex items-center justify-center h-full">
+                                       <p className="text-sm text-gray-500 text-center italic">Nessun turno di lavoro definito per le sedi selezionate.</p>
+                                    </div>
+                                ) : (
+                                    availableShiftsByLocation.map(([location, shifts]) => (
+                                        <div key={location}>
+                                            <h4 className="font-semibold text-gray-600 mb-2 sticky top-0 bg-gray-50 py-1">{location}</h4>
+                                            <div className="space-y-2">
+                                                {shifts.map(shift => (
+                                                    <div key={shift.code} className="flex items-center">
+                                                        <input
+                                                            type="checkbox"
+                                                            id={`shift-team-${shift.code}`}
+                                                            checked={selectedShiftCodes.includes(shift.code)}
+                                                            onChange={() => handleShiftToggle(shift.code)}
+                                                            className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                                        />
+                                                        <label htmlFor={`shift-team-${shift.code}`} className="ml-3 flex items-center text-sm text-gray-700">
+                                                            <span className={`w-8 text-center mr-2 font-bold p-1 text-xs rounded-sm ${shift.color} ${shift.textColor}`}>{shift.code.replace('_doc', '')}</span>
+                                                            {shift.description}
+                                                        </label>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+
+                        <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">Membri del Team</label>
-                             <div className="space-y-4 h-96 overflow-y-auto p-4 border rounded-md bg-gray-50">
+                             <div className="space-y-4 h-full overflow-y-auto p-4 border rounded-md bg-gray-50">
                                 {staffByRole.nurses.length > 0 && <StaffCheckboxList title="Infermieri e Caposala" staff={staffByRole.nurses} />}
                                 {staffByRole.oss.length > 0 && <StaffCheckboxList title="OSS" staff={staffByRole.oss} />}
                                 {staffByRole.doctors.length > 0 && <StaffCheckboxList title="Medici" staff={staffByRole.doctors} />}

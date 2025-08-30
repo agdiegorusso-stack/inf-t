@@ -1,17 +1,19 @@
 
+
 import React, { useState } from 'react';
-import type { Team, Staff } from '../types';
+import type { Team, Staff, ShiftDefinition } from '../types';
 import { TeamModal } from './TeamModal';
 
 interface TeamManagementProps {
     teams: Team[];
     staffList: Staff[];
+    shiftDefinitions: ShiftDefinition[];
     onAddTeamAndMembers: (teamData: Omit<Team, 'id'>, memberIds: string[]) => void;
     onUpdateTeamAndMembers: (teamId: string, teamData: Partial<Omit<Team, 'id'>>, newMemberIds: string[]) => void;
     onDeleteTeam: (teamId: string) => void;
 }
 
-export const TeamManagement: React.FC<TeamManagementProps> = ({ teams, staffList, onAddTeamAndMembers, onUpdateTeamAndMembers, onDeleteTeam }) => {
+export const TeamManagement: React.FC<TeamManagementProps> = ({ teams, staffList, shiftDefinitions, onAddTeamAndMembers, onUpdateTeamAndMembers, onDeleteTeam }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingTeam, setEditingTeam] = useState<Team | null>(null);
 
@@ -124,6 +126,7 @@ export const TeamManagement: React.FC<TeamManagementProps> = ({ teams, staffList
                     existingTeam={editingTeam}
                     allTeams={teams}
                     staffList={staffList}
+                    shiftDefinitions={shiftDefinitions}
                 />
             )}
         </div>

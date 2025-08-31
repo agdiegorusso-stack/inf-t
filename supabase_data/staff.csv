@@ -1,0 +1,65 @@
+id,name,role,contract,phone,email,hasLaw104,specialRules,unavailableShiftCodes,nightSquad
+1,"Bevilacqua Monica",Caposala,h12,391234567890,monica.bevilacqua@aslroma2.it,false,"",{},
+2,"Vaccaro Pietro",Caposala,h12,391234567890,pietro.vaccaro@aslroma2.it,false,"",{},
+3,"Marrama Anna Maria",Caposala,h12,391234567890,annamaria.marrama@aslroma2.it,false,"",{},
+4,"Bobo Alessandro",Infermiere,h12,391234567890,alessandro.bobo@aslroma2.it,false,"",{},
+5,"Caprioli Francesca",Infermiere,h12,391234567890,francesca.caprioli@aslroma2.it,false,"",{},
+6,"Amatucci Elisa",Infermiere,h12,391234567890,amatucci.elisa@ospedale.it,false,"",{},
+7,"Cardillo Marcello",Infermiere,h12,391234567890,cardillo.marcello@ospedale.it,false,"",{},
+8,"Dosa Simona",Infermiere,h12,391234567890,dosa.simona@ospedale.it,false,"",{},
+9,"Costa Adriana",Infermiere,h6,391234567890,costa.adriana@ospedale.it,false,"",{},
+10,"Onofri Nadia",Infermiere,h6,391234567890,onofri.nadia@ospedale.it,false,"",{},
+11,"Di Carlo Michela",Infermiere,h12,391234567890,dicarlo.michela@ospedale.it,false,"",{},
+12,"Mirtella Cinzia",Infermiere,h12,391234567890,mirtella.cinzia@ospedale.it,false,"",{},
+13,"Leto Giorgina",Infermiere,h12,391234567890,leto.giorgina@ospedale.it,false,"",{},
+14,"Cerreto Elisa",Infermiere,h12,391234567890,cerreto.elisa@ospedale.it,false,"",{},
+15,"Evangelista Chiara",Infermiere,h12,391234567890,evangelista.chiara@ospedale.it,false,"",{},
+16,"Fantini Vincenzo",Infermiere,h12,391234567890,fantini.vincenzo@ospedale.it,false,"",{},
+17,"Kaoutar Elaouane",Infermiere,h6,391234567890,elaouane.kaoutar@ospedale.it,false,"",{},
+18,"Di Bernardino Martina",Infermiere,h12,391234567890,dibernardino.martina@ospedale.it,false,"",{},
+19,"Marianelli Debora",Infermiere,h12,391234567890,marianelli.debora@ospedale.it,false,"",{},
+20,"Bruni Eleonora",Infermiere,h12,391234567890,bruni.eleonora@ospedale.it,false,"",{},
+21,"Russo Diego",Infermiere,h12,391234567890,russo.diego@ospedale.it,false,"",{},
+22,"Barletta M.Enza",Infermiere,h12,391234567890,barletta.enza@ospedale.it,false,"",{},
+23,"Moriconi Annarita",Infermiere,h12,391234567890,moriconi.annarita@ospedale.it,false,"",{},
+24,"Massa Enrica",Infermiere,h12,391234567890,massa.enrica@ospedale.it,false,"",{},
+25,"Ottaviani Fabio",Infermiere,h12,391234567890,ottaviani.fabio@ospedale.it,false,"",{},
+26,"Panella Tiziana",Infermiere,h12,391234567890,panella.tiziana@ospedale.it,false,"",{},
+27,"Brandolini Francesca",Infermiere,h12,391234567890,brandolini.francesca@ospedale.it,false,"",{},
+28,"Bonanni Maria",Infermiere,h6,391234567890,bonanni.maria@ospedale.it,false,"",{},
+29,"Michelini Silvia",Infermiere,h6,391234567890,michelini.silvia@ospedale.it,false,"",{},
+30,"Orfino Alessia",Infermiere,h6,391234567890,orfino.alessia@ospedale.it,false,"",{},
+31,"Ciofani Marta",Infermiere,h24,391234567890,ciofani.marta@ospedale.it,false,"",{},1
+32,"Cinili M.Pia",Infermiere,h24,391234567890,cinili.pia@ospedale.it,false,"",{},2
+33,"Vaccelli Francesco",Infermiere,h24,391234567890,vaccelli.francesco@ospedale.it,false,"",{},3
+34,"Vanegas Chloe",Infermiere,h24,391234567890,vanegas.chloe@ospedale.it,false,"",{},4
+35,"Rinaldi Simone",Infermiere,h24,391234567890,rinaldi.simone@ospedale.it,false,"",{},5
+36,"Fiasco Stefania",Infermiere,h24,391234567890,fiasco.stefania@ospedale.it,false,"",{},1
+37,"Ribaudi Alessia",Infermiere,h24,391234567890,ribaudi.alessia@ospedale.it,false,"",{},2
+38,"Spoletini Veronica",Infermiere,h24,391234567890,spoletini.veronica@ospedale.it,false,"",{},3
+39,"Ciafrei Ivano",Infermiere,h24,391234567890,ciafrei.ivano@ospedale.it,false,"",{},4
+40,"Pagano Leopoldo",Infermiere,h24,391234567890,pagano.leopoldo@ospedale.it,false,"",{},5
+41,"Restaino Alessandro",Infermiere,h24,391234567890,restaino.alessandro@ospedale.it,false,"",{},1
+42,"Passeri Rosita",Infermiere,h24,391234567890,passeri.rosita@ospedale.it,false,"",{},2
+43,"Iandolo Ilaria",Infermiere,h24,391234567890,iandolo.ilaria@ospedale.it,false,"",{},3
+44,"Vannacci Valentino",Infermiere,h24,391234567890,vannacci.valentino@ospedale.it,false,"",{},4
+45,"Marchese Rossana",Infermiere,h24,391234567890,marchese.rossana@ospedale.it,false,"",{},5
+46,"Longo Andrea Simone",Infermiere,h24,391234567890,longo.andrea@ospedale.it,false,"",{},1
+47,"Viola Simone",Infermiere,h24,391234567890,viola.simone@ospedale.it,false,"",{},2
+48,"Giglioni Alessandro",Infermiere,h24,391234567890,giglioni.alessandro@ospedale.it,false,"",{},3
+49,"Incerti Liborio Emanuele",Infermiere,h24,391234567890,incerti.liborio@ospedale.it,false,"",{},4
+50,"Di Giuditta Assunta",Infermiere,h24,391234567890,digiuditta.assunta@ospedale.it,false,"",{},5
+51,"Di Carlo Angela",Infermiere,h12,391234567890,dicarlo.angela@ospedale.it,false,"",{},
+52,"Martinelli Gloria",Infermiere,h6,391234567890,martinelli.gloria@ospedale.it,false,"",{},
+53,"Paris Paola",OSS,h12,391234567890,paris.paola@ospedale.it,false,"",{},
+54,"Pantaleoni Nicole",OSS,h12,391234567890,pantaleoni.nicole@ospedale.it,false,"",{},
+55,"Perotti Daniele",OSS,h12,391234567890,perotti.daniele@ospedale.it,false,"",{},
+56,"Colongo Danilo",OSS,h12,391234567890,colongo.danilo@ospedale.it,false,"",{},
+57,"Colasanti M.Antonietta",OSS,h12,391234567890,colasanti.antonietta@ospedale.it,false,"",{},
+58,"Micacchioni Jennifer",OSS,h12,391234567890,micacchioni.jennifer@ospedale.it,false,"",{},
+59,"Traballoni Daniela",OSS,h12,391234567890,traballoni.daniela@ospedale.it,false,"",{},
+60,"Pittiglio Michele",Medico,h24,,,false,"",{},1
+61,"Sara Dominijanni",Medico,h24,,,false,"",{},2
+62,"Angeloni Vincenzo",Medico,h24,,,false,"",{},3
+63,"Giuliani Giovanni",Medico,h24,,,false,"",{},4
+64,"Moscatelli Mariana",Medico,h24,,,false,"",{},5

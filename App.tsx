@@ -10,7 +10,7 @@ import { useShiftData } from './hooks/useShiftData';
 import type { ScheduledShift, Staff, Team } from './types';
 import { ContractType, StaffRole } from './types';
 import { LoginScreen } from './components/LoginScreen';
-import { mockAuthenticateUser } from './services/authService';
+import { mockAuthenticateUser, changePasswordInSupabase } from './services/authService';
 import { ShiftPlanner } from './components/ShiftPlanner';
 import { PersonnelPage } from './components/PersonnelPage';
 import { StaffEditModal } from './components/StaffEditModal';
@@ -19,6 +19,7 @@ export type ActiveTab = 'nurses' | 'oss' | 'doctors';
 
 const App: React.FC = () => {
     const { 
+        isLoading: isDataLoading,
         staff,
         teams, 
         scheduledShifts, 
@@ -35,7 +36,7 @@ const App: React.FC = () => {
         addShiftDefinition,
         deleteShiftDefinition,
         updateShiftDefinition,
-        changePassword,
+        // changePassword, // We will use the direct service here
         addTeam,
         updateTeam,
         deleteTeam,
@@ -44,7 +45,7 @@ const App: React.FC = () => {
 
     const [currentUser, setCurrentUser] = useState<Staff | null>(null);
     const [loginError, setLoginError] = useState<string | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
+    const [isAuthLoading, setIsAuthLoading] = useState(false);
     const [currentDate, setCurrentDate] = useState(new Date());
     const [isAbsenceModalOpen, setIsAbsenceModalOpen] = useState(false);
     const [isReplacementModalOpen, setIsReplacementModalOpen] = useState(false);
@@ -54,7 +55,7 @@ const App: React.FC = () => {
     const [activeTab, setActiveTab] = useState<ActiveTab>('nurses');
 
     const handleLogin = useCallback(async (staffId: string, password: string) => {
-        setIsLoading(true);
+        setIsAuthLoading(true);
         setLoginError(null);
         try {
             const user = await mockAuthenticateUser(staffId, password);
@@ -66,7 +67,7 @@ const App: React.FC = () => {
                 setLoginError("Si è verificato un errore inaspettato.");
             }
         } finally {
-            setIsLoading(false);
+            setIsAuthLoading(false);
         }
     }, []);
 
@@ -118,59 +119,48 @@ const App: React.FC = () => {
     }, [updateStaffMember]);
 
     const handleScheduleOverwrite = useCallback((newShifts: ScheduledShift[], targetMonth: string, affectedStaffIds: string[]) => {
-        // La conferma ora viene gestita nel componente ShiftPlanner prima di chiamare questa funzione.
         overwriteSchedule(newShifts, targetMonth, affectedStaffIds);
-        
-        // BUG FIX: Naviga al mese appena generato.
-        // Crea un oggetto Date dalla stringa "YYYY-MM". Usare T12:00:00Z evita problemi di fuso orario.
         const newDate = new Date(`${targetMonth}-01T12:00:00Z`);
         handleDateChange(newDate);
-
         setView('calendar');
         alert("Calendario turni generato e aggiornato con successo!");
     }, [overwriteSchedule, handleDateChange]);
 
-    const handleAddTeamAndMembers = useCallback((teamData: Omit<Team, 'id'>, memberIds: string[]) => {
+    const handleAddTeamAndMembers = useCallback(async (teamData: Omit<Team, 'id'>, memberIds: string[]) => {
         const newTeam: Team = {
             id: `team-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
             ...teamData,
         };
-        addTeam(newTeam);
+        await addTeam(newTeam);
 
-        memberIds.forEach(staffId => {
+        for (const staffId of memberIds) {
             const staffMember = getStaffById(staffId);
             if (staffMember) {
                 const updatedTeamIds = [...new Set([...(staffMember.teamIds || []), newTeam.id])];
-                updateStaffMember(staffId, { teamIds: updatedTeamIds });
+                await updateStaffMember(staffId, { teamIds: updatedTeamIds });
             }
-        });
+        }
     }, [addTeam, getStaffById, updateStaffMember]);
 
-    const handleUpdateTeamAndMembers = useCallback((teamId: string, teamData: Partial<Omit<Team, 'id'>>, newMemberIds: string[]) => {
-        updateTeam(teamId, teamData);
-
+    const handleUpdateTeamAndMembers = useCallback(async (teamId: string, teamData: Partial<Omit<Team, 'id'>>, newMemberIds: string[]) => {
+        await updateTeam(teamId, teamData);
         const newMemberIdsSet = new Set(newMemberIds);
         const originalMembers = staff.filter(s => s.teamIds?.includes(teamId));
-        const originalMemberIdsSet = new Set(originalMembers.map(s => s.id));
 
-        // Staff to be removed from the team
-        originalMembers.forEach(member => {
+        for(const member of originalMembers) {
             if (!newMemberIdsSet.has(member.id)) {
                 const updatedTeamIds = member.teamIds.filter(id => id !== teamId);
-                updateStaffMember(member.id, { teamIds: updatedTeamIds });
+                await updateStaffMember(member.id, { teamIds: updatedTeamIds });
             }
-        });
+        }
 
-        // Staff to be added to the team
-        newMemberIds.forEach(staffId => {
-            if (!originalMemberIdsSet.has(staffId)) {
-                const staffMember = getStaffById(staffId);
-                if (staffMember) {
-                    const updatedTeamIds = [...(staffMember.teamIds || []), teamId];
-                    updateStaffMember(staffId, { teamIds: updatedTeamIds });
-                }
+        for(const staffId of newMemberIds) {
+            const staffMember = getStaffById(staffId);
+            if (staffMember && !staffMember.teamIds?.includes(teamId)) {
+                const updatedTeamIds = [...(staffMember.teamIds || []), teamId];
+                await updateStaffMember(staffId, { teamIds: updatedTeamIds });
             }
-        });
+        }
     }, [updateTeam, staff, updateStaffMember, getStaffById]);
 
     const replacements = useMemo(() => {
@@ -179,7 +169,7 @@ const App: React.FC = () => {
     }, [selectedShift, findReplacements]);
 
     const filteredStaff = useMemo(() => {
-        const staffAndUnassigned = staff; // includes "Turni Scoperti"
+        const staffAndUnassigned = staff;
         switch (activeTab) {
             case 'nurses':
                 return staffAndUnassigned.filter(s => s.role === StaffRole.Nurse || s.role === StaffRole.HeadNurse || s.id === 'unassigned');
@@ -206,9 +196,23 @@ const App: React.FC = () => {
     }, [staff, activeTab]);
 
     if (!currentUser) {
-        return <LoginScreen staffList={staff} onLogin={handleLogin} error={loginError} isLoading={isLoading} onChangePassword={changePassword} />;
+        return <LoginScreen staffList={staff} onLogin={handleLogin} error={loginError} isLoading={isAuthLoading} onChangePassword={changePasswordInSupabase} />;
     }
 
+    if (isDataLoading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-100">
+                <div className="flex flex-col items-center">
+                     <svg className="animate-spin h-12 w-12 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <p className="mt-4 text-lg text-gray-700 font-semibold">Caricamento dati in corso...</p>
+                </div>
+            </div>
+        );
+    }
+    
     const TabButton: React.FC<{tabName: ActiveTab, label: string}> = ({ tabName, label }) => (
         <button
             onClick={() => setActiveTab(tabName)}
@@ -233,7 +237,7 @@ const App: React.FC = () => {
                                 onDateChange={handleDateChange} 
                                 onAddAbsenceClick={handleOpenAbsenceModal}
                                 scheduledShifts={scheduledShifts}
-                                staff={filteredStaff} // Pass filtered staff for CSV download
+                                staff={filteredStaff}
                                 currentUser={currentUser}
                                 onManagePersonnelClick={() => setView('personnel')}
                             />

@@ -735,7 +735,7 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                 }
     
                 // --- PASS 2: ASSEGNAZIONE TURNI PER COPERTURA FABBISOGNO ---
-                log.push("PASS 2: Assegnazione turni per coprire il fabbisogno rimanente...");
+                log.push("PASS 2: Assegnazione turni per coprire il fabbisogno...");
                  const getRequirementForDay = (shiftCode: string, dayOfWeek: number, dateStr: string): {min: number, max: number} => {
                     const override = dateOverrides[shiftCode]?.[dateStr];
                     if(override !== undefined) return typeof override === 'number' ? {min: override, max: override} : override;
@@ -750,30 +750,59 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                     .filter(s => [ShiftTime.Morning, ShiftTime.Afternoon, ShiftTime.Night, ShiftTime.FullDay].includes(s.time))
                     .map(s => s.code);
 
-                 for (let day = 1; day <= daysInMonth; day++) {
+                // Sub-pass 2.1: Meet MINIMUM requirements
+                log.push("PASS 2.1: Copertura del fabbisogno MINIMO...");
+                for (let day = 1; day <= daysInMonth; day++) {
                     const date = new Date(year, month - 1, day);
                     const dateStr = formatDate(date);
                     const dayOfWeek = date.getDay();
 
                     for (const shiftCode of shiftCodesToFill) {
-                        const { min: requiredCount } = getRequirementForDay(shiftCode, dayOfWeek, dateStr);
+                        const { min: minRequired } = getRequirementForDay(shiftCode, dayOfWeek, dateStr);
                         let assignedCount = Object.values(staffAssignments).filter(d => d[dateStr] === shiftCode).length;
-                        
-                        if (assignedCount < requiredCount) {
-                            // Find staff who are free on this day and are allowed to do this shift
-                            const candidates = staffList.filter(s => 
-                                !staffAssignments[s.id]?.[dateStr] && 
+
+                        if (assignedCount < minRequired) {
+                            const candidates = staffList.filter(s =>
+                                !staffAssignments[s.id]?.[dateStr] &&
                                 isShiftAllowed(shiftCode, s, shiftDefinitions, teams)
-                            ).sort((a,b) => staffStats[a.id].totalShifts - staffStats[b.id].totalShifts); // Prioritize those with fewer shifts
+                            ).sort((a, b) => staffStats[a.id].totalShifts - staffStats[b.id].totalShifts);
 
                             for (const staffToAssign of candidates) {
-                                if (assignedCount >= requiredCount) break;
+                                if (assignedCount >= minRequired) break;
                                 assignShift(staffToAssign.id, dateStr, shiftCode);
                                 assignedCount++;
                             }
                         }
                     }
                 }
+                log.push("✅ Fabbisogno MINIMO coperto dove possibile.");
+
+                // Sub-pass 2.2: Try to reach MAXIMUM requirements with remaining staff
+                log.push("PASS 2.2: Tentativo di raggiungere il fabbisogno MASSIMO...");
+                for (let day = 1; day <= daysInMonth; day++) {
+                    const date = new Date(year, month - 1, day);
+                    const dateStr = formatDate(date);
+                    const dayOfWeek = date.getDay();
+
+                    for (const shiftCode of shiftCodesToFill) {
+                        const { max: maxRequired } = getRequirementForDay(shiftCode, dayOfWeek, dateStr);
+                        let assignedCount = Object.values(staffAssignments).filter(d => d[dateStr] === shiftCode).length;
+
+                        if (assignedCount < maxRequired) {
+                            const candidates = staffList.filter(s =>
+                                !staffAssignments[s.id]?.[dateStr] &&
+                                isShiftAllowed(shiftCode, s, shiftDefinitions, teams)
+                            ).sort((a, b) => staffStats[a.id].totalShifts - staffStats[b.id].totalShifts); // Keep prioritizing staff with fewer shifts to balance the load
+
+                            for (const staffToAssign of candidates) {
+                                if (assignedCount >= maxRequired) break;
+                                assignShift(staffToAssign.id, dateStr, shiftCode);
+                                assignedCount++;
+                            }
+                        }
+                    }
+                }
+                log.push("✅ Personale aggiuntivo assegnato per raggiungere il fabbisogno MASSIMO dove possibile.");
     
                 // --- PASS FINALE: VERIFICA COPERTURA E CREAZIONE TURNI SCOPERTI ---
                 log.push("PASS FINALE: Verifica della copertura totale e creazione turni scoperti...");

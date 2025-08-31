@@ -675,14 +675,26 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                     staffAssignments[absence.staffId][absence.date] = absence.shiftCode;
                 });
     
-                // BUG FIX: Rimuovo il caricamento dei turni pre-esistenti.
-                // La generazione deve partire da una tabula rasa per applicare le nuove regole,
-                // altrimenti i turni esistenti (spesso casuali) bloccano l'applicazione delle rotazioni corrette.
-                // scheduledShifts.forEach(shift => {
-                //     if (shift.date.startsWith(targetDate) && affectedStaffIds.has(shift.staffId) && !staffAssignments[shift.staffId]?.[shift.date]) {
-                //         staffAssignments[shift.staffId][shift.date] = shift.shiftCode || '';
-                //     }
-                // });
+                // --- PASS 0.5: H6/H12 SUNDAY REST ---
+                log.push("PASS 0.5: Applicazione riposo domenicale per personale H6 e H12...");
+                const h6h12Staff = staffList.filter(s => s.contract === ContractType.H6 || s.contract === ContractType.H12);
+                if (h6h12Staff.length > 0) {
+                    for (let day = 1; day <= daysInMonth; day++) {
+                        const date = new Date(year, month - 1, day);
+                        if (date.getDay() === 0) { // Sunday
+                            const dateStr = formatDate(date);
+                            h6h12Staff.forEach(member => {
+                                // Only assign if no fixed shift (like an absence) is already there.
+                                if (!staffAssignments[member.id]?.[dateStr]) {
+                                    assignShift(member.id, dateStr, 'RS');
+                                }
+                            });
+                        }
+                    }
+                    log.push(`✅ Assegnato 'RS' (Riposo Settimanale) a ${h6h12Staff.length} operatori H6/H12 per tutte le domeniche del mese.`);
+                } else {
+                    log.push(`ℹ️ Nessun operatore H6/H12 trovato in questa categoria. Salto PASS 0.5.`);
+                }
     
                 // --- PASS 1: H24 NIGHT SQUAD ROTATION (Nurses Only) ---
                 if (activeTab === 'nurses') {

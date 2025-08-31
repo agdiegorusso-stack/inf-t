@@ -1,7 +1,0 @@
-id,name,locations,allowedShiftCodes
-team-se,"Team Sant'Eugenio","{Dialisi Sant'Eugenio,Urgenza Sant'Eugenio,Reparto Nefrologia Sant'Eugenio,Ambulatorio DH Sant'Eugenio,Stanza B,Piano 0,Piano 2}","{Md,Ps,Mu,Pu,Mn,Pn,N,Mat,Mat/e,Me,Pe,Mb,Pb,M0,P0,MT,PT,G_doc,R_doc,A_doc,N_doc}"
-team-sc,"Team Santa Caterina","{Dialisi Santa Caterina}","{Msc,Psc}"
-team-cto,"Team CTO","{Dialisi CTO,Dialisi Peritoneale CTO}","{Mc,Pc,Mac,G_doc,R_doc}"
-team-co,"Team Camera Operatoria","{Sala Operatoria Sant'Eugenio}","{Mco}"
-team-misto,"Team Misto (Tutte le Sedi)","{Dialisi Sant'Eugenio,Dialisi Santa Caterina,Dialisi CTO,Urgenza Sant'Eugenio,Sala Operatoria Sant'Eugenio,Dialisi Peritoneale CTO,Reparto Nefrologia Sant'Eugenio,Ambulatorio DH Sant'Eugenio,Ambulatorio Via Marotta,Esterno,Stanza B,Piano 0,Piano 2}","{Md,Ps,Msc,Psc,Mc,Pc,Mu,Pu,Mco,Mac,Mn,Pn,N,Mat,Mat/e,Me,Pe,Mb,Pb}"
-team-management,"Team Direzione","{Direzione}","{M,R_doc}"

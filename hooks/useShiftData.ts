@@ -1,12 +1,9 @@
 
-
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { UNASSIGNED_STAFF_ID } from '../constants';
+import { UNASSIGNED_STAFF_ID, mockStaff, mockTeams, mockShiftDefinitions } from '../constants';
 import type { Staff, ScheduledShift, Absence, ShiftDefinition, ReplacementOption, Team, Location } from '../types';
-import { ShiftTime, ContractType as ContractEnum, StaffRole as RoleEnum, StaffRole, ContractType } from '../types';
+import { ShiftTime, StaffRole as RoleEnum, StaffRole } from '../types';
 import { isShiftAllowed } from '../utils/shiftUtils';
-import { supabase } from '../services/supabaseClient';
-import type { Database } from '../services/supabaseClient';
 
 // Helper to format date to YYYY-MM-DD
 const formatDate = (date: Date): string => date.toISOString().split('T')[0];
@@ -20,103 +17,14 @@ export const useShiftData = () => {
     const [shiftDefinitions, setShiftDefinitions] = useState<ShiftDefinition[]>([]);
 
     useEffect(() => {
-        const fetchData = async () => {
-            setIsLoading(true);
-            try {
-                const [
-                    { data: staffData, error: staffError },
-                    { data: teamsData, error: teamsError },
-                    { data: staffTeamsData, error: staffTeamsError },
-                    { data: shiftsData, error: shiftsError },
-                    { data: defsData, error: defsError },
-                    { data: absencesData, error: absencesError }
-                ] = await Promise.all([
-                    supabase.from('staff').select('*'),
-                    supabase.from('teams').select('*'),
-                    supabase.from('staff_teams').select('*'),
-                    supabase.from('scheduled_shifts').select('*'),
-                    supabase.from('shift_definitions').select('*'),
-                    supabase.from('absences').select('*')
-                ]);
-
-                const errors = [staffError, teamsError, staffTeamsError, shiftsError, defsError, absencesError].filter(Boolean);
-                if (errors.length > 0) {
-                    console.error("Errors fetching data from Supabase:", errors);
-                    throw new Error("Failed to fetch initial application data.");
-                }
-
-                // Map camelCase from DB to camelCase for client-side Staff objects.
-                const staffWithTeams: Staff[] = (staffData || []).map(s => {
-                    const teamIds = (staffTeamsData || [])
-                        .filter(st => st.staff_id === s.id)
-                        .map(st => st.team_id);
-                    return {
-                        id: s.id,
-                        name: s.name,
-                        role: s.role as StaffRole,
-                        contract: s.contract as ContractType,
-                        teamIds,
-                        phone: s.phone ?? undefined,
-                        email: s.email ?? undefined,
-                        password: s.password ?? undefined,
-                        hasLaw104: s.hasLaw104 ?? false,
-                        specialRules: s.specialRules ?? undefined,
-                        unavailableShiftCodes: s.unavailableShiftCodes ?? undefined,
-                        nightSquad: s.nightSquad ?? undefined
-                    };
-                });
-                
-                // Map camelCase from DB to camelCase for client-side Team objects.
-                const mappedTeams: Team[] = (teamsData || []).map(t => ({
-                    id: t.id,
-                    name: t.name,
-                    locations: t.locations as Location[],
-                    allowedShiftCodes: t.allowedShiftCodes ?? []
-                }));
-
-                // Map snake_case from DB to camelCase for client-side ScheduledShift objects.
-                const mappedShifts: ScheduledShift[] = (shiftsData || []).map(s => ({
-                    id: s.id,
-                    date: s.date,
-                    staffId: s.staff_id,
-                    shiftCode: s.shift_code,
-                    originalStaffId: s.original_staff_id ?? undefined
-                }));
-
-                // Map camelCase from DB to camelCase for client-side ShiftDefinition objects.
-                const mappedDefs: ShiftDefinition[] = (defsData || []).map(d => ({
-                    code: d.code,
-                    description: d.description,
-                    color: d.color,
-                    textColor: d.textColor,
-                    location: d.location as Location,
-                    time: d.time as ShiftTime,
-                    roles: d.roles as StaffRole[],
-                }));
-
-                // Map snake_case from DB to camelCase for client-side Absence objects.
-                const mappedAbsences: Absence[] = (absencesData || []).map(a => ({
-                    id: a.id,
-                    staffId: a.staff_id,
-                    startDate: a.start_date,
-                    endDate: a.end_date,
-                    reason: a.reason,
-                }));
-
-
-                setStaff(staffWithTeams);
-                setTeams(mappedTeams);
-                setScheduledShifts(mappedShifts);
-                setShiftDefinitions(mappedDefs);
-                setAbsences(mappedAbsences);
-            } catch (error) {
-                console.error(error);
-                // Optionally set an error state to show in the UI
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchData();
+        // Simulate loading data from constants
+        setStaff(JSON.parse(JSON.stringify(mockStaff)));
+        setTeams(JSON.parse(JSON.stringify(mockTeams)));
+        setShiftDefinitions(JSON.parse(JSON.stringify(mockShiftDefinitions)));
+        setScheduledShifts([]); 
+        setAbsences([]);
+        // Use a timeout to ensure the loading spinner shows briefly, preventing UI flicker.
+        setTimeout(() => setIsLoading(false), 50); 
     }, []);
 
 
@@ -139,54 +47,16 @@ export const useShiftData = () => {
         });
         return Array.from(locationsSet);
     }, [getTeamById]);
-
+    
     const addTeam = useCallback(async (newTeam: Team) => {
-        const { data, error } = await supabase.from('teams').insert({
-            id: newTeam.id,
-            name: newTeam.name,
-            locations: newTeam.locations,
-            allowedShiftCodes: newTeam.allowedShiftCodes,
-        }).select().single();
-        if (error) {
-            console.error("Error adding team:", error);
-            return;
-        }
-        // FIX: Add null check for data returned from Supabase.
-        if (data) {
-            const addedTeam: Team = { ...data, allowedShiftCodes: data.allowedShiftCodes ?? [], locations: data.locations as Location[] };
-            setTeams(prev => [...prev, addedTeam]);
-        }
+        setTeams(prev => [...prev, newTeam]);
     }, []);
 
     const updateTeam = useCallback(async (teamId: string, updates: Partial<Omit<Team, 'id'>>) => {
-        const dbUpdates: Partial<Database['public']['Tables']['teams']['Row']> = { ...updates };
-        
-        const { data, error } = await supabase.from('teams').update(dbUpdates).eq('id', teamId).select().single();
-        if (error) {
-            console.error("Error updating team:", error);
-            return;
-        }
-        // FIX: Add null check for data returned from Supabase.
-        if (data) {
-            const updatedTeam: Team = { ...data, id: data.id, name: data.name, allowedShiftCodes: data.allowedShiftCodes ?? [], locations: data.locations as Location[] };
-            setTeams(prev => prev.map(t => t.id === teamId ? updatedTeam : t));
-        }
+        setTeams(prev => prev.map(t => t.id === teamId ? { ...t, ...updates } : t));
     }, []);
 
     const deleteTeam = useCallback(async (teamId: string) => {
-        // Also handled by cascade delete in Supabase, but good practice to be explicit
-        const { error: staffTeamError } = await supabase.from('staff_teams').delete().eq('team_id', teamId);
-         if (staffTeamError) {
-            console.error("Error deleting staff-team associations:", staffTeamError);
-            return;
-        }
-
-        const { error } = await supabase.from('teams').delete().eq('id', teamId);
-        if (error) {
-            console.error("Error deleting team:", error);
-            return;
-        }
-
         setTeams(prev => prev.filter(t => t.id !== teamId));
         setStaff(prevStaff => prevStaff.map(s => ({
             ...s,
@@ -195,16 +65,7 @@ export const useShiftData = () => {
     }, []);
 
     const addShiftDefinition = useCallback(async (newShift: ShiftDefinition) => {
-        const { data, error } = await supabase.from('shift_definitions').insert(newShift).select().single();
-        if (error) {
-            console.error("Error adding shift definition:", error);
-            return;
-        }
-        // FIX: Add null check for data returned from Supabase.
-        if (data) {
-            const addedShift: ShiftDefinition = { ...data, textColor: data.textColor, location: data.location as Location, time: data.time as ShiftTime, roles: data.roles as StaffRole[] };
-            setShiftDefinitions(prev => [...prev, addedShift]);
-        }
+        setShiftDefinitions(prev => [...prev, newShift]);
     }, []);
 
     const deleteShiftDefinition = useCallback(async (code: string) => {
@@ -212,86 +73,75 @@ export const useShiftData = () => {
             alert("Impossibile eliminare il turno perché è attualmente assegnato nel calendario. Rimuovere tutte le assegnazioni prima di procedere.");
             return;
         }
-        const { error } = await supabase.from('shift_definitions').delete().eq('code', code);
-        if (error) {
-            console.error("Error deleting shift definition:", error);
-            return;
-        }
         setShiftDefinitions(prev => prev.filter(s => s.code !== code));
     }, [scheduledShifts]);
 
     const updateShiftDefinition = useCallback(async (originalCode: string, updatedShift: ShiftDefinition) => {
-        const { data, error } = await supabase.from('shift_definitions').update(updatedShift).eq('code', originalCode).select().single();
-         if (error) {
-            console.error("Error updating shift definition:", error);
-            return;
-        }
-        // FIX: Add null check for data returned from Supabase.
-        if (data) {
-            const newShiftDef: ShiftDefinition = { ...data, textColor: data.textColor, location: data.location as Location, time: data.time as ShiftTime, roles: data.roles as StaffRole[] };
-            setShiftDefinitions(prev => prev.map(s => s.code === originalCode ? newShiftDef : s));
+        setShiftDefinitions(prev => prev.map(s => s.code === originalCode ? updatedShift : s));
+        // Also update any scheduled shifts that use the old code
+        if (originalCode !== updatedShift.code) {
+             setScheduledShifts(prevShifts => prevShifts.map(ss => {
+                if (ss.shiftCode === originalCode) {
+                    return { ...ss, shiftCode: updatedShift.code };
+                }
+                return ss;
+            }));
         }
     }, []);
+    
+    const addAbsence = useCallback((staffId: string, reason: string, startDate: Date, endDate: Date) => {
+        const newAbsence: Absence = {
+            id: `abs-${staffId}-${Date.now()}`,
+            staffId,
+            reason,
+            startDate: formatDate(startDate),
+            endDate: formatDate(endDate),
+        };
+        setAbsences(prev => [...prev, newAbsence]);
 
-    const addAbsence = useCallback(async (staffId: string, reason: string, startDate: Date, endDate: Date) => {
-        const newAbsence = { staff_id: staffId, reason, start_date: formatDate(startDate), end_date: formatDate(endDate) };
-        const { data: insertedAbsence, error: absenceError } = await supabase.from('absences').insert(newAbsence).select().single();
-        if(absenceError || !insertedAbsence) {
-            console.error("Error adding absence:", absenceError);
-            return;
-        }
-        const mappedAbsence: Absence = { id: insertedAbsence.id, staffId: insertedAbsence.staff_id, startDate: insertedAbsence.start_date, endDate: insertedAbsence.end_date, reason: insertedAbsence.reason };
-        setAbsences(prev => [...prev, mappedAbsence]);
-
-        let currentDate = new Date(startDate);
-        const shiftsToUpsert = [];
-        const uncoveredShiftsToInsert = [];
+        let newShifts: ScheduledShift[] = [];
+        let uncoveredShifts: ScheduledShift[] = [];
         
-        while (currentDate <= endDate) {
-            const dateStr = formatDate(currentDate);
+        for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+            const dateStr = formatDate(d);
+            
+            // Find if there was an original shift that needs to be uncovered
             const originalShift = scheduledShifts.find(s => s.staffId === staffId && s.date === dateStr);
-            const originalShiftCode = originalShift?.shiftCode;
-            const originalShiftDef = originalShiftCode ? getShiftDefinitionByCode(originalShiftCode) : null;
+            const originalShiftDef = originalShift?.shiftCode ? getShiftDefinitionByCode(originalShift.shiftCode) : null;
             
             if (originalShiftDef && originalShiftDef.time !== ShiftTime.Absence && originalShiftDef.time !== ShiftTime.Rest) {
-                uncoveredShiftsToInsert.push({
-                    id: `uncovered-${staffId}-${dateStr}`,
+                 uncoveredShifts.push({
+                    id: `uncovered-${staffId}-${dateStr}-${Math.random()}`,
                     date: dateStr,
-                    staff_id: UNASSIGNED_STAFF_ID,
-                    shift_code: originalShiftCode,
-                    original_staff_id: staffId,
+                    staffId: UNASSIGNED_STAFF_ID,
+                    shiftCode: originalShift!.shiftCode,
+                    originalStaffId: staffId,
                 });
             }
-            shiftsToUpsert.push({
+
+            // Add the new absence shift
+            newShifts.push({
                 id: `${staffId}-${dateStr}`,
-                staff_id: staffId,
+                staffId,
                 date: dateStr,
-                shift_code: reason
+                shiftCode: reason,
             });
-            currentDate.setDate(currentDate.getDate() + 1);
         }
 
-        if (uncoveredShiftsToInsert.length > 0) {
-            await supabase.from('scheduled_shifts').upsert(uncoveredShiftsToInsert);
-        }
-        await supabase.from('scheduled_shifts').upsert(shiftsToUpsert);
-        
-        // Refetch shifts to ensure consistency
-        const { data: updatedShiftsData } = await supabase.from('scheduled_shifts').select('*');
-        if(updatedShiftsData) {
-            const mappedShifts: ScheduledShift[] = updatedShiftsData.map(s => ({
-                id: s.id,
-                date: s.date,
-                staffId: s.staff_id,
-                shiftCode: s.shift_code,
-                originalStaffId: s.original_staff_id ?? undefined
-            }));
-            setScheduledShifts(mappedShifts);
-        }
-    }, [getShiftDefinitionByCode, scheduledShifts]);
+        setScheduledShifts(prev => {
+            // Filter out old shifts for the user in the date range
+            const otherShifts = prev.filter(s => {
+                if (s.staffId !== staffId) return true;
+                const shiftDate = new Date(s.date);
+                return shiftDate < startDate || shiftDate > endDate;
+            });
+            // Add the new absence shifts and any new uncovered shifts
+            return [...otherShifts, ...newShifts, ...uncoveredShifts];
+        });
+
+    }, [scheduledShifts, getShiftDefinitionByCode]);
 
     const findReplacements = useCallback((uncoveredShift: ScheduledShift): ReplacementOption[] => {
-        // This logic remains client-side as it's for finding candidates, not writing data.
         const uncoveredShiftDef = getShiftDefinitionByCode(uncoveredShift.shiftCode!);
         if (!uncoveredShiftDef) return [];
 
@@ -301,203 +151,113 @@ export const useShiftData = () => {
         const replacements = staff
             .filter(s => {
                 if (s.id === uncoveredShift.originalStaffId || s.id === UNASSIGNED_STAFF_ID) return false;
-                // Role check
-                if (uncoveredShiftDef.roles.length > 0 && !uncoveredShiftDef.roles.includes(s.role) && !(s.role === RoleEnum.HeadNurse && uncoveredShiftDef.roles.includes(RoleEnum.Nurse))) return false;
-                // Availability, night shift rules, etc.
+                if (!isShiftAllowed(uncoveredShift.shiftCode!, s, shiftDefinitions, teams)) return false;
+
                 const staffShiftOnDate = scheduledShifts.find(shift => shift.staffId === s.id && shift.date === uncoveredShift.date);
                 if (staffShiftOnDate?.shiftCode) {
                     const staffShiftDef = getShiftDefinitionByCode(staffShiftOnDate.shiftCode);
-                    if (staffShiftDef && (staffShiftDef.time === ShiftTime.Absence || staffShiftDef.code === 'S')) return false;
+                    // Can't replace if they are already working, on absence, or post-night
+                    if (staffShiftDef && (staffShiftDef.time !== ShiftTime.Rest || staffShiftDef.code === 'S')) return false;
                 }
-                return true; // Simplified for brevity
+                return true;
             })
             .map(s => {
-                // Scoring logic remains the same
                 return { staff: s, reason: "Disponibile", priority: 1 };
             })
             .sort((a, b) => b.priority - a.priority);
 
         return replacements;
-    }, [staff, scheduledShifts, getShiftDefinitionByCode, getStaffById, getStaffAllowedLocations]);
+    }, [staff, scheduledShifts, getShiftDefinitionByCode, getStaffById, teams]);
     
     const assignShift = useCallback(async (shiftId: string, newStaffId: string) => {
         const unassignedShift = scheduledShifts.find(s => s.id === shiftId);
         if (!unassignedShift) return;
 
-        // Delete the 'unassigned' shift
-        await supabase.from('scheduled_shifts').delete().eq('id', shiftId);
+        setScheduledShifts(prev => {
+            // Remove the unassigned shift
+            const filtered = prev.filter(s => s.id !== shiftId);
+            
+            // Upsert the new shift for the staff member
+            const existingShiftIndex = filtered.findIndex(s => s.staffId === newStaffId && s.date === unassignedShift.date);
+            const newShift: ScheduledShift = {
+                id: `${newStaffId}-${unassignedShift.date}`,
+                staffId: newStaffId,
+                date: unassignedShift.date,
+                shiftCode: unassignedShift.shiftCode,
+            };
 
-        // Upsert the shift for the new staff member
-        const { data, error } = await supabase.from('scheduled_shifts').upsert({
-            id: `${newStaffId}-${unassignedShift.date}`,
-            staff_id: newStaffId,
-            date: unassignedShift.date,
-            shift_code: unassignedShift.shiftCode
-        }).select();
-
-        if(error) {
-            console.error("Error assigning shift:", error);
-            // Re-insert the uncovered shift to revert state? Or show error.
-            return;
-        }
-
-        // Refetch for consistency instead of manual state updates
-        const { data: updatedShiftsData } = await supabase.from('scheduled_shifts').select('*');
-        if (updatedShiftsData) {
-            const mappedShifts: ScheduledShift[] = updatedShiftsData.map(s => ({
-                id: s.id,
-                date: s.date,
-                staffId: s.staff_id,
-                shiftCode: s.shift_code,
-                originalStaffId: s.original_staff_id ?? undefined
-            }));
-            setScheduledShifts(mappedShifts);
-        }
+            if (existingShiftIndex > -1) {
+                filtered[existingShiftIndex] = newShift;
+                return filtered;
+            } else {
+                return [...filtered, newShift];
+            }
+        });
     }, [scheduledShifts]);
 
     const updateShift = useCallback(async (staffId: string, date: string, newShiftCode: string | null) => {
         const id = `${staffId}-${date}`;
-        let updatedShiftData: Database['public']['Tables']['scheduled_shifts']['Row'] | null = null;
-        if (newShiftCode) {
-            const { data, error } = await supabase.from('scheduled_shifts').upsert({ id, staff_id: staffId, date, shift_code: newShiftCode }).select().single();
-            if(error) { console.error("Error updating shift:", error); return; }
-            updatedShiftData = data;
-        } else {
-            const { error } = await supabase.from('scheduled_shifts').delete().eq('id', id);
-            if(error) { console.error("Error deleting shift:", error); return; }
-        }
-        
-        const updatedShift: ScheduledShift | null = updatedShiftData ? {
-            id: updatedShiftData.id,
-            staffId: updatedShiftData.staff_id,
-            date: updatedShiftData.date,
-            shiftCode: updatedShiftData.shift_code,
-            originalStaffId: updatedShiftData.original_staff_id ?? undefined
-        } : null;
-
         setScheduledShifts(prev => {
             const otherShifts = prev.filter(s => s.id !== id);
-            return updatedShift ? [...otherShifts, updatedShift] : otherShifts;
+            if (newShiftCode) {
+                const newShift: ScheduledShift = { id, staffId, date, shiftCode: newShiftCode };
+                return [...otherShifts, newShift];
+            }
+            return otherShifts;
         });
-
-        // Basic handling for creating/removing uncovered shifts
-        // A more robust solution would use a database trigger or function (RPC).
-        const originalShift = scheduledShifts.find(s => s.id === id);
-        if (originalShift?.shiftCode) {
-             const wasWorking = getShiftDefinitionByCode(originalShift.shiftCode)?.time !== ShiftTime.Rest;
-             const isNowAbsence = newShiftCode ? getShiftDefinitionByCode(newShiftCode)?.time === ShiftTime.Absence : false;
-             if (wasWorking && isNowAbsence) {
-                await supabase.from('scheduled_shifts').insert({
-                    id: `uncovered-${id}`, date, staff_id: UNASSIGNED_STAFF_ID, shift_code: originalShift.shiftCode, original_staff_id: staffId
-                });
-                // Refetch for consistency
-                const {data} = await supabase.from('scheduled_shifts').select('*');
-                if(data) {
-                    const mappedShifts: ScheduledShift[] = data.map(s => ({
-                        id: s.id,
-                        date: s.date,
-                        staffId: s.staff_id,
-                        shiftCode: s.shift_code,
-                        originalStaffId: s.original_staff_id ?? undefined
-                    }));
-                    setScheduledShifts(mappedShifts);
-                }
-             }
-        }
-    }, [scheduledShifts, getShiftDefinitionByCode]);
+    }, []);
 
     const overwriteSchedule = useCallback(async (newShifts: ScheduledShift[], targetMonth: string, affectedStaffIds: string[]) => {
-        // Delete existing shifts for the given month and staff
-        const { error: deleteError } = await supabase
-            .from('scheduled_shifts')
-            .delete()
-            .in('staff_id', affectedStaffIds)
-            .like('date', `${targetMonth}-%`);
-        
-        if (deleteError) { console.error("Error clearing schedule:", deleteError); return; }
-
-        // Insert new shifts
-        const dbShifts = newShifts.map(s => ({
-            id: s.id,
-            date: s.date,
-            staff_id: s.staffId,
-            shift_code: s.shiftCode,
-            original_staff_id: s.originalStaffId
-        }));
-        const { error: insertError } = await supabase.from('scheduled_shifts').insert(dbShifts);
-        if(insertError) { console.error("Error inserting new schedule:", insertError); return; }
-
-        // Refetch all shifts to update UI
-        const { data } = await supabase.from('scheduled_shifts').select('*');
-        if(data) {
-            const mappedShifts: ScheduledShift[] = data.map(s => ({
-                id: s.id,
-                date: s.date,
-                staffId: s.staff_id,
-                shiftCode: s.shift_code,
-                originalStaffId: s.original_staff_id ?? undefined
-            }));
-            setScheduledShifts(mappedShifts);
-        }
+        setScheduledShifts(prev => {
+            const otherShifts = prev.filter(s => {
+                const isInMonth = s.date.startsWith(targetMonth);
+                const isAffected = affectedStaffIds.includes(s.staffId);
+                // Keep shifts that are NOT in the affected month for the affected staff
+                return !(isInMonth && isAffected);
+            });
+            return [...otherShifts, ...newShifts];
+        });
     }, []);
 
     const importSchedule = useCallback(async (newShifts: ScheduledShift[]) => {
-        // Similar to overwrite, but determines staff/month from data
-         if (newShifts.length === 0) return;
+        if (newShifts.length === 0) return;
         const affectedMonths = Array.from(new Set(newShifts.map(s => s.date.substring(0, 7))));
         const affectedStaffIds = Array.from(new Set(newShifts.map(s => s.staffId)));
 
-        for (const month of affectedMonths) {
-            await supabase.from('scheduled_shifts').delete().in('staff_id', affectedStaffIds).like('date', `${month}-%`);
-        }
-        const dbShifts = newShifts.map(s => ({
-            id: s.id,
-            date: s.date,
-            staff_id: s.staffId,
-            shift_code: s.shiftCode,
-            original_staff_id: s.originalStaffId
-        }));
-        await supabase.from('scheduled_shifts').insert(dbShifts);
-        
-        const { data } = await supabase.from('scheduled_shifts').select('*');
-        if(data) {
-            const mappedShifts: ScheduledShift[] = data.map(s => ({
-                id: s.id,
-                date: s.date,
-                staffId: s.staff_id,
-                shiftCode: s.shift_code,
-                originalStaffId: s.original_staff_id ?? undefined
-            }));
-            setScheduledShifts(mappedShifts);
-        }
+        setScheduledShifts(prev => {
+            const otherShifts = prev.filter(s => {
+                const month = s.date.substring(0, 7);
+                const isAffectedMonth = affectedMonths.includes(month);
+                const isAffectedStaff = affectedStaffIds.includes(s.staffId);
+                return !(isAffectedMonth && isAffectedStaff);
+            });
+            return [...otherShifts, ...newShifts];
+        });
     }, []);
 
     const updateStaffMember = useCallback(async (staffId: string, updates: Partial<Omit<Staff, 'id' | 'name'>>) => {
-        const { teamIds, ...staffUpdates } = updates;
-        
-        const dbStaffUpdates: Partial<Database['public']['Tables']['staff']['Update']> = { ...staffUpdates };
-
-        const { data, error } = await supabase.from('staff').update(dbStaffUpdates).eq('id', staffId).select().single();
-        if (error) { console.error("Error updating staff:", error); return; }
-        
-        if (teamIds !== undefined) {
-            await supabase.from('staff_teams').delete().eq('staff_id', staffId);
-            if(teamIds.length > 0) {
-                 await supabase.from('staff_teams').insert(teamIds.map(team_id => ({ staff_id: staffId, team_id })));
-            }
-        }
-        
         setStaff(prev => prev.map(s => s.id === staffId ? { ...s, ...updates } : s));
-    }, []);
-
-    const changePassword = useCallback(async (staffId: string, newPassword: string): Promise<void> => {
-        const { error } = await supabase.from('staff').update({ password: newPassword }).eq('id', staffId);
-        if (error) {
-            console.error("Error changing password:", error);
-            throw new Error("Could not update password in database.");
+        
+        // This is needed because the mockStaff in constants.ts is also used by authService
+        const staffMember = mockStaff.find(s => s.id === staffId);
+        if (staffMember) {
+            Object.assign(staffMember, updates);
         }
-        setStaff(prev => prev.map(s => s.id === staffId ? { ...s, password: newPassword } : s));
     }, []);
+    
+    const changePassword = useCallback(async (staffId: string, oldPassword: string, newPassword: string): Promise<void> => {
+        const staffMember = staff.find(s => s.id === staffId);
+        if (!staffMember) {
+            throw new Error("Utente non trovato.");
+        }
+        
+        if (staffMember.password !== oldPassword) {
+            throw new Error("La vecchia password non è corretta.");
+        }
+        
+        await updateStaffMember(staffId, { password: newPassword });
+    }, [staff, updateStaffMember]);
+
 
     return { 
         isLoading,
@@ -517,7 +277,7 @@ export const useShiftData = () => {
         addShiftDefinition,
         deleteShiftDefinition,
         updateShiftDefinition,
-        changePassword, // This is a simplified version, real auth would be different
+        changePassword,
         addTeam,
         updateTeam,
         deleteTeam,

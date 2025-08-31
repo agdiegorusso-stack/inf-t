@@ -10,7 +10,7 @@ import { useShiftData } from './hooks/useShiftData';
 import type { ScheduledShift, Staff, Team } from './types';
 import { ContractType, StaffRole } from './types';
 import { LoginScreen } from './components/LoginScreen';
-import { mockAuthenticateUser, changePasswordInSupabase } from './services/authService';
+import { mockAuthenticateUser } from './services/authService';
 import { ShiftPlanner } from './components/ShiftPlanner';
 import { PersonnelPage } from './components/PersonnelPage';
 import { StaffEditModal } from './components/StaffEditModal';
@@ -36,7 +36,7 @@ const App: React.FC = () => {
         addShiftDefinition,
         deleteShiftDefinition,
         updateShiftDefinition,
-        // changePassword, // We will use the direct service here
+        changePassword,
         addTeam,
         updateTeam,
         deleteTeam,
@@ -196,7 +196,7 @@ const App: React.FC = () => {
     }, [staff, activeTab]);
 
     if (!currentUser) {
-        return <LoginScreen staffList={staff} onLogin={handleLogin} error={loginError} isLoading={isAuthLoading} onChangePassword={changePasswordInSupabase} />;
+        return <LoginScreen staffList={staff} onLogin={handleLogin} error={loginError} isLoading={isAuthLoading} onChangePassword={changePassword} />;
     }
 
     if (isDataLoading) {

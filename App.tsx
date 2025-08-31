@@ -30,6 +30,7 @@ const App: React.FC = () => {
         getShiftDefinitionByCode,
         updateShift,
         overwriteSchedule,
+        importSchedule,
         updateStaffMember,
         addShiftDefinition,
         deleteShiftDefinition,
@@ -280,6 +281,7 @@ const App: React.FC = () => {
                         staffList={plannerStaffList}
                         activeTab={activeTab}
                         onGenerateSchedule={handleScheduleOverwrite}
+                        onImportSchedule={importSchedule}
                         getShiftDefinitionByCode={getShiftDefinitionByCode}
                         scheduledShifts={scheduledShifts}
                         shiftDefinitions={shiftDefinitions}

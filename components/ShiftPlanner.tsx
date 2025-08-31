@@ -1,5 +1,5 @@
 // FIX: Import `useCallback` from `react` to resolve 'Cannot find name' error.
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import type { Staff, ScheduledShift, ShiftDefinition, ShiftRequirements, RequirementPreset, ShiftRequirementValue, Team } from '../types';
 import { UNASSIGNED_STAFF_ID } from '../constants';
 import { Location, ShiftTime, ContractType, StaffRole } from '../types';
@@ -9,10 +9,14 @@ import type { ActiveTab } from '../App';
 import { AddShiftModal } from './AddShiftModal';
 import { EditShiftModal } from './EditShiftModal';
 
+// Declare XLSX for TypeScript since it's loaded from a script tag
+declare var XLSX: any;
+
 interface ShiftPlannerProps {
     staffList: Staff[]; // This will be pre-filtered by App.tsx based on the active tab
     activeTab: ActiveTab;
     onGenerateSchedule: (newShifts: ScheduledShift[], targetMonth: string, affectedStaffIds: string[]) => void;
+    onImportSchedule: (newShifts: ScheduledShift[]) => void;
     getShiftDefinitionByCode: (code: string) => ShiftDefinition | undefined;
     scheduledShifts: ScheduledShift[];
     shiftDefinitions: ShiftDefinition[];
@@ -70,39 +74,8 @@ const parseRequirement = (value: string): ShiftRequirementValue => {
     return isNaN(num) ? 0 : Math.max(0, num);
 };
 
-// Helper function to determine the next shift type in the H24 cycle.
-const getNextShiftType = (lastShiftCode: string | null, getShiftDef: (code: string) => ShiftDefinition | undefined): ShiftTime | 'S' | 'R' => {
-    if (!lastShiftCode) {
-        return ShiftTime.Morning; // Start of a new cycle
-    }
 
-    // Handle non-defined codes like 'S' and 'R'
-    if (lastShiftCode === 'S') return 'R';
-    if (lastShiftCode === 'R') return ShiftTime.Morning;
-    
-    const lastShiftDef = getShiftDef(lastShiftCode);
-
-    if (!lastShiftDef) {
-        return ShiftTime.Morning; // If code is unknown (e.g., from old data), start a new cycle.
-    }
-    
-    switch (lastShiftDef.time) {
-        case ShiftTime.Morning:
-            return ShiftTime.Afternoon;
-        case ShiftTime.Afternoon:
-            return ShiftTime.Night;
-        case ShiftTime.Night:
-            return 'S';
-        case ShiftTime.Absence:
-        case ShiftTime.Rest:
-            return ShiftTime.Morning; // Start new cycle after a day off
-        default:
-            return ShiftTime.Morning;
-    }
-};
-
-
-export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab, onGenerateSchedule, getShiftDefinitionByCode, scheduledShifts, shiftDefinitions, teams, onAddShift, deleteShiftDefinition, updateShiftDefinition }) => {
+export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab, onGenerateSchedule, onImportSchedule, getShiftDefinitionByCode, scheduledShifts, shiftDefinitions, teams, onAddShift, deleteShiftDefinition, updateShiftDefinition }) => {
     
     const [requirements, setRequirements] = useState<ShiftRequirements>({});
     const [presets, setPresets] = useState<RequirementPreset[]>([]);
@@ -116,6 +89,8 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
     const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
     const [isAddShiftModalOpen, setIsAddShiftModalOpen] = useState(false);
     const [editingShift, setEditingShift] = useState<ShiftDefinition | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
 
     const [dateOverrides, setDateOverrides] = useState<Record<string, Record<string, ShiftRequirementValue>>>(() => {
         try {
@@ -386,6 +361,208 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
         deleteShiftDefinition(code);
         setEditingShift(null);
     };
+    
+    const handleImportClick = () => {
+        fileInputRef.current?.click();
+    };
+
+    const handleFileImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        const [currentYear] = targetDate.split('-').map(Number);
+        const log: string[] = [];
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const data = new Uint8Array(e.target?.result as ArrayBuffer);
+                const workbook = XLSX.read(data, { type: 'array' });
+
+                const normalizeName = (name: string) =>
+                    name.trim().toLowerCase()
+                        .replace(/['.]/g, '') // Rimuove apostrofi e punti
+                        .replace(/\s+/g, ' '); // Normalizza gli spazi
+
+                const staffNameCache = staffList.map(s => ({
+                    id: s.id,
+                    normalized: normalizeName(s.name),
+                }));
+
+                const findStaffByFlexibleName = (excelName: string): Staff | undefined => {
+                    if (!excelName || typeof excelName !== 'string') return undefined;
+
+                    // Pulisce il nome dall'Excel, rimuovendo annotazioni comuni
+                    const cleanedExcelName = excelName.replace(/\(.*\)|\bdialisi-cto\b/g, '').trim();
+                    const normalizedExcelName = normalizeName(cleanedExcelName);
+
+                    if (normalizedExcelName.length < 3) return undefined;
+
+                    // 1. Prova una corrispondenza esatta sul nome normalizzato
+                    let found = staffNameCache.find(staffData => staffData.normalized === normalizedExcelName);
+                    if (found) return staffList.find(s => s.id === found.id);
+
+                    // 2. Se fallisce, prova una corrispondenza più permissiva (es. il nome nel DB è contenuto nel nome in Excel)
+                    // Questo aiuta con nomi che hanno suffissi o dettagli aggiuntivi nel file.
+                    found = staffNameCache.find(staffData => normalizedExcelName.includes(staffData.normalized));
+                    if (found) return staffList.find(s => s.id === found.id);
+                    
+                    return undefined;
+                };
+
+
+                const monthMap: { [key: string]: number } = {
+                    gennaio: 0, febbraio: 1, marzo: 2, aprile: 3, maggio: 4, giugno: 5,
+                    luglio: 6, agosto: 7, settembre: 8, ottobre: 9, novembre: 10, dicembre: 11
+                };
+                const monthNames = Object.keys(monthMap);
+                const monthRegex = new RegExp(`(${monthNames.join('|')})`, 'i');
+                const yearRegex = /(\d{4})/;
+
+                let parsedShifts: ScheduledShift[] = [];
+                let importedMonths: string[] = [];
+
+                workbook.SheetNames.forEach((sheetName: string) => {
+                    const trimmedSheetName = sheetName.trim().toLowerCase();
+                    const monthMatch = trimmedSheetName.match(monthRegex);
+                    if (!monthMatch) return;
+
+                    const monthName = monthMatch[1].toLowerCase();
+                    const month = monthMap[monthName];
+                    const yearMatch = trimmedSheetName.match(yearRegex);
+                    const year = yearMatch ? parseInt(yearMatch[0], 10) : currentYear;
+                    
+                    if (!importedMonths.includes(sheetName)) {
+                        importedMonths.push(sheetName);
+                    }
+
+                    const worksheet = workbook.Sheets[sheetName];
+                    const json: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
+                    if (json.length < 2) return;
+                    
+                    let lastProcessedRow = -1;
+
+                    for (let rowIndex = 0; rowIndex < json.length; rowIndex++) {
+                        if (rowIndex <= lastProcessedRow) continue;
+                        
+                        const row = json[rowIndex];
+                        if (!Array.isArray(row) || row.every(cell => cell === null)) continue;
+                        
+                        const dayColumnMap: Map<number, number> = new Map();
+                        let numericCells = 0;
+                        row.forEach((cell, cellIndex) => {
+                            const day = parseInt(String(cell), 10);
+                            if (!isNaN(day) && day >= 1 && day <= 31) {
+                                dayColumnMap.set(day, cellIndex);
+                                numericCells++;
+                            }
+                        });
+
+                        if (numericCells < 7) continue; // A week's worth of days is a good heuristic
+
+                        let personnelColIndex = -1;
+                        let bestColumn = { index: -1, score: 0 };
+                        const sampleRows = json.slice(rowIndex + 1, rowIndex + 15);
+                        const numCols = Math.max(...json.map(r => r ? r.length : 0));
+
+                        for (let j = 0; j < numCols; j++) {
+                            if (Array.from(dayColumnMap.values()).includes(j)) continue;
+
+                            let matchCount = 0;
+                            let validSamples = 0;
+                            for (const sampleRow of sampleRows) {
+                                const cellValue = sampleRow?.[j];
+                                if (cellValue && typeof cellValue === 'string' && cellValue.trim().length > 3) {
+                                    validSamples++;
+                                    if (findStaffByFlexibleName(cellValue)) {
+                                        matchCount++;
+                                    }
+                                }
+                            }
+                            const score = validSamples > 0 ? matchCount / validSamples : 0;
+                            if (score > bestColumn.score) {
+                                bestColumn = { index: j, score };
+                            }
+                        }
+                        
+                        if (bestColumn.score < 0.5) continue;
+                        personnelColIndex = bestColumn.index;
+
+                        log.push(`Trovata tabella in "${sheetName}" alla riga ${rowIndex + 1}. Colonna personale: ${personnelColIndex}.`);
+                        
+                        let dataRowIndex = rowIndex + 1;
+                        let consecutiveEmptyRows = 0;
+                        while (dataRowIndex < json.length) {
+                            const dataRow = json[dataRowIndex];
+                            const staffNameCell = dataRow?.[personnelColIndex];
+                        
+                            const isEffectivelyEmpty = !staffNameCell || typeof staffNameCell !== 'string' || staffNameCell.trim().length < 3;
+                        
+                            if (isEffectivelyEmpty) {
+                                consecutiveEmptyRows++;
+                                const isNewHeader = dataRow && Array.isArray(dataRow) && dataRow.filter(cell => {
+                                    const day = parseInt(String(cell), 10);
+                                    return !isNaN(day) && day >= 1 && day <= 31;
+                                }).length > 7;
+                        
+                                if (consecutiveEmptyRows > 3 || isNewHeader) {
+                                    break;
+                                }
+                                
+                                dataRowIndex++;
+                                continue;
+                            }
+                        
+                            consecutiveEmptyRows = 0;
+                        
+                            const staffMember = findStaffByFlexibleName(staffNameCell);
+                        
+                            if (staffMember) {
+                                dayColumnMap.forEach((colIndex, day) => {
+                                    const shiftCode = dataRow[colIndex] ? String(dataRow[colIndex]).trim() : null;
+                                    if (shiftCode) {
+                                        const daysInTargetMonth = new Date(year, month + 1, 0).getDate();
+                                        if (day > 0 && day <= daysInTargetMonth) {
+                                            const date = new Date(year, month, day);
+                                            const dateStr = formatDate(date);
+                                            parsedShifts.push({
+                                                id: `${staffMember.id}-${dateStr}`,
+                                                staffId: staffMember.id,
+                                                date: dateStr,
+                                                shiftCode,
+                                            });
+                                        }
+                                    }
+                                });
+                            } else {
+                                if (typeof staffNameCell === 'string' && staffNameCell.trim().length > 3) {
+                                    console.warn(`Personale non trovato durante l'importazione: ${staffNameCell}`);
+                                }
+                            }
+                            dataRowIndex++;
+                        }
+                        lastProcessedRow = dataRowIndex - 1;
+                    }
+                });
+
+                if (parsedShifts.length > 0) {
+                    onImportSchedule(parsedShifts);
+                    alert(`Importazione completata con successo da: ${importedMonths.join(', ')}.\nSono stati importati ${parsedShifts.length} turni.`);
+                } else {
+                     alert("Nessun turno valido trovato nel file. Controlla che:\n- Il nome di un foglio contenga un mese (es. 'Settembre 2025' o 'Settembre').\n- All'interno del foglio ci sia una tabella con una riga di intestazione contenente i numeri dei giorni (1, 2, 3...).\n- Sotto l'intestazione, ci sia una colonna con nomi di personale riconoscibili.");
+                }
+
+            } catch (error) {
+                console.error("Errore durante l'importazione del file Excel:", error);
+                alert("Si è verificato un errore durante la lettura del file. Assicurati che sia un file .xlsx valido.");
+            } finally {
+                if (fileInputRef.current) {
+                    fileInputRef.current.value = '';
+                }
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    };
 
     const handleGenerate = useCallback(() => {
         setIsGenerating(true);
@@ -398,7 +575,20 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                 const log: string[] = [`ℹ️ Inizio generazione per ${tabTitleMap[activeTab]} - ${targetDate}...`];
                 
                 const newSchedule: ScheduledShift[] = [];
+                // Pre-fill assignments with existing shifts for the month
                 const staffAssignments: Record<string, Record<string, string>> = {};
+                let existingShiftsCount = 0;
+                const affectedStaffIds = new Set(staffList.map(s => s.id));
+                scheduledShifts.forEach(shift => {
+                    if (shift.date.startsWith(targetDate) && affectedStaffIds.has(shift.staffId)) {
+                        if (!staffAssignments[shift.staffId]) staffAssignments[shift.staffId] = {};
+                        staffAssignments[shift.staffId][shift.date] = shift.shiftCode || '';
+                        existingShiftsCount++;
+                    }
+                });
+                if (existingShiftsCount > 0) {
+                    log.push(`✅ Rispettati ${existingShiftsCount} turni pre-esistenti in questo mese.`);
+                }
     
                 const firstDayOfMonth = new Date(year, month - 1, 1);
                 const lastDayOfPrevMonth = new Date(firstDayOfMonth.getTime() - 86400000);
@@ -428,13 +618,22 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                             if (typeof reqValue === 'number') { min = max = reqValue; }
                             else if (typeof reqValue === 'object') { min = reqValue.min; max = reqValue.max; }
                             
+                            // Count already assigned staff towards the need
+                            let alreadyAssigned = 0;
+                            staffList.forEach(s => {
+                                if (staffAssignments[s.id]?.[dateStr] === shiftCode) {
+                                    alreadyAssigned++;
+                                }
+                            });
+
                             if (max > 0) {
-                                dailyNeeds[shiftCode] = { min, max, assigned: 0 };
+                                dailyNeeds[shiftCode] = { min, max, assigned: alreadyAssigned };
                             }
                         }
                     });
     
-                    let availableStaffIds = new Set(staffList.map(s => s.id));
+                    let availableStaffIds = new Set(staffList.filter(s => !staffAssignments[s.id]?.[dateStr]).map(s => s.id));
+
                     const assignShift = (staffId: string, shiftCode: string) => {
                         if (!staffAssignments[staffId]) staffAssignments[staffId] = {};
                         staffAssignments[staffId][dateStr] = shiftCode;
@@ -445,28 +644,20 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                         }
                     };
     
-                    // Pass 1: Mandatory assignments based on strict rules.
+                    // Pass 1: Mandatory assignments for available staff.
                     staffList.forEach(staff => {
-                        if (!availableStaffIds.has(staff.id)) return;
+                        if (!availableStaffIds.has(staff.id)) return; // Skip if already assigned
     
                         const lastShiftCode = staffAssignments[staff.id]?.[prevDateStr] ?? h24InitialState[staff.id];
     
-                        // Rule: 'S' (Smonto Notte) after a 'N' (Notte) shift.
                         if (lastShiftCode && getShiftDefinitionByCode(lastShiftCode)?.time === ShiftTime.Night) {
-                            assignShift(staff.id, 'S');
-                            return;
+                            assignShift(staff.id, 'S'); return;
                         }
-    
-                        // Rule: 'R' (Riposo) for H24 staff on the day after 'S'.
                         if (staff.contract === ContractType.H24 && lastShiftCode === 'S') {
-                            assignShift(staff.id, 'R');
-                            return;
+                            assignShift(staff.id, 'R'); return;
                         }
-    
-                        // Rule: 'RS' (Riposo Settimanale) on Sundays for H6 and H12 staff.
                         if (date.getDay() === 0 && (staff.contract === ContractType.H6 || staff.contract === ContractType.H12)) {
-                            assignShift(staff.id, 'RS');
-                            return;
+                            assignShift(staff.id, 'RS'); return;
                         }
                     });
     
@@ -489,7 +680,7 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                             if (candidate) {
                                 assignShift(candidate.id, shiftCode);
                             } else {
-                                break; // No one available for this shift, will become "uncovered".
+                                break;
                             }
                         }
                     });
@@ -505,12 +696,9 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                         if (suitableShift) {
                             assignShift(staff.id, suitableShift);
                         }
-                        // If no suitable shift, the staff member remains unassigned for the day.
                     });
 
-                    // Pass 4 (DELETED): No more automatic 'R' for leftovers.
-    
-                    // Pass 5: Final check for uncovered shifts.
+                    // Pass 4: Final check for uncovered shifts.
                     Object.entries(dailyNeeds).forEach(([shiftCode, need]) => {
                         if (need.assigned < need.min) {
                             const deficit = need.min - need.assigned;
@@ -525,7 +713,7 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                 // --- Finalization ---
                 Object.entries(staffAssignments).forEach(([staffId, assignments]) => {
                     Object.entries(assignments).forEach(([date, shiftCode]) => {
-                        newSchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode });
+                        newSchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode: shiftCode || null });
                     });
                 });
     
@@ -569,6 +757,14 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
 
     return (
         <div className="space-y-8">
+            <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                accept=".xlsx, .xls"
+                onChange={handleFileImport}
+            />
+
             {isAddShiftModalOpen && (
                 <AddShiftModal
                     isOpen={isAddShiftModalOpen}
@@ -594,7 +790,15 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
             <h2 className="text-3xl font-bold text-gray-800 border-b pb-4">Pianificazione Automatica Turni ({tabTitleMap[activeTab]})</h2>
 
             <div className="bg-white p-6 rounded-lg shadow-md">
-                 <h3 className="text-xl font-bold text-gray-700 mb-4">1. Definizione Fabbisogno Settimanale</h3>
+                 <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-bold text-gray-700">1. Definizione Fabbisogno Settimanale</h3>
+                    <button onClick={handleImportClick} className="flex items-center px-3 py-1.5 text-sm bg-teal-600 text-white rounded-md shadow-sm hover:bg-teal-700 transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                        Importa Excel
+                    </button>
+                 </div>
                  <div className="flex flex-wrap items-center gap-3 mb-4 pb-4 border-b">
                     <div className="flex items-center gap-2">
                         <label htmlFor="preset-select" className="font-medium text-gray-700 whitespace-nowrap">Carica Template:</label>
@@ -760,7 +964,7 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                     </svg>}
-                                    {isGenerating ? 'Generazione...' : 'Conferma Sovrascrittura'}
+                                    {isGenerating ? 'Generazione...' : 'Conferma e Completa'}
                                 </button>
                                 <button onClick={() => setIsConfirming(false)} disabled={isGenerating}
                                         className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition-colors">

@@ -573,6 +573,25 @@ export const useShiftData = () => {
         });
     }, []);
 
+    const importSchedule = useCallback((newShifts: ScheduledShift[]) => {
+        if (newShifts.length === 0) {
+            return;
+        }
+
+        const affectedMonths = new Set(newShifts.map(s => s.date.substring(0, 7)));
+        const affectedStaffIds = new Set(newShifts.map(s => s.staffId));
+
+        setScheduledShifts(prevShifts => {
+            const remainingShifts = prevShifts.filter(shift => {
+                const month = shift.date.substring(0, 7);
+                const isAffected = affectedMonths.has(month) && affectedStaffIds.has(shift.staffId);
+                return !isAffected;
+            });
+            return [...remainingShifts, ...newShifts];
+        });
+    }, []);
+
+
     const updateStaffMember = useCallback((staffId: string, updates: Partial<Omit<Staff, 'id' | 'name'>>) => {
         setStaff(prevStaff => {
             const updatedStaff = prevStaff.map(s =>
@@ -630,6 +649,7 @@ export const useShiftData = () => {
         getShiftDefinitionByCode,
         updateShift,
         overwriteSchedule,
+        importSchedule,
         updateStaffMember,
         addShiftDefinition,
         deleteShiftDefinition,

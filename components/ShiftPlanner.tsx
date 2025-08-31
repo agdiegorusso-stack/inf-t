@@ -91,6 +91,11 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
     const [editingShift, setEditingShift] = useState<ShiftDefinition | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // State for planner absences
+    const [plannerAbsences, setPlannerAbsences] = useState<Array<{ staffId: string; date: string; shiftCode: string }>>([]);
+    const [absenceStaffId, setAbsenceStaffId] = useState<string>('');
+    const [selectedAbsenceDates, setSelectedAbsenceDates] = useState<string[]>([]);
+    const [absenceCode, setAbsenceCode] = useState<string>('');
 
     const [dateOverrides, setDateOverrides] = useState<Record<string, Record<string, ShiftRequirementValue>>>(() => {
         try {
@@ -127,6 +132,71 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
             }
         }).sort((a,b) => a.code.localeCompare(b.code));
     }, [activeTab, shiftDefinitions]);
+
+    const absenceShiftDefs = useMemo(() => {
+        return shiftDefinitions.filter(s => s.time === ShiftTime.Absence).sort((a,b) => a.description.localeCompare(b.description));
+    }, [shiftDefinitions]);
+
+    const staffMap = useMemo(() => new Map(staffList.map(s => [s.id, s.name])), [staffList]);
+
+    useEffect(() => {
+        if (absenceShiftDefs.length > 0 && !absenceCode) {
+            setAbsenceCode(absenceShiftDefs[0].code);
+        }
+    }, [absenceShiftDefs, absenceCode]);
+
+     const currentMonthAbsences = useMemo(() => {
+        return plannerAbsences.filter(a => a.date.startsWith(targetDate));
+    }, [plannerAbsences, targetDate]);
+
+    const handleAbsenceDateToggle = (dateStr: string) => {
+        setSelectedAbsenceDates(prev => {
+            const isSelected = prev.includes(dateStr);
+            if (isSelected) {
+                return prev.filter(d => d !== dateStr);
+            } else {
+                return [...prev, dateStr].sort();
+            }
+        });
+    };
+
+    const handleAddAbsence = () => {
+        if (!absenceStaffId || selectedAbsenceDates.length === 0 || !absenceCode) {
+            alert("Per favore, seleziona il personale, il tipo di assenza e almeno un giorno dal calendario.");
+            return;
+        }
+
+        const newAbsences = selectedAbsenceDates.map(date => ({
+            staffId: absenceStaffId,
+            date: date,
+            shiftCode: absenceCode
+        }));
+
+        setPlannerAbsences(prev => {
+            const existingAbsences = new Set(prev.map(a => `${a.staffId}-${a.date}`));
+            const filteredNewAbsences = newAbsences.filter(
+                newA => !existingAbsences.has(`${newA.staffId}-${newA.date}`)
+            );
+            
+            if (filteredNewAbsences.length < newAbsences.length) {
+                alert("Alcune delle assenze selezionate erano già presenti e non sono state aggiunte di nuovo.");
+            }
+
+            const updatedAbsences = [...prev, ...filteredNewAbsences];
+            return updatedAbsences.sort((a, b) => {
+                const dateCompare = a.date.localeCompare(b.date);
+                if (dateCompare !== 0) return dateCompare;
+                return (staffMap.get(a.staffId) || '').localeCompare(staffMap.get(b.staffId) || '');
+            });
+        });
+
+        setSelectedAbsenceDates([]);
+    };
+
+    const handleRemoveAbsence = (staffId: string, date: string) => {
+        setPlannerAbsences(prev => prev.filter(a => !(a.staffId === staffId && a.date === date)));
+    };
+
 
     const handlePresetChange = useCallback((presetId: string) => {
         setSelectedPresetId(presetId);
@@ -567,159 +637,222 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
     const handleGenerate = useCallback(() => {
         setIsGenerating(true);
         setGenerationLog([]);
-    
+
         setTimeout(() => {
             try {
                 const [year, month] = targetDate.split('-').map(Number);
                 const daysInMonth = new Date(year, month, 0).getDate();
                 const log: string[] = [`ℹ️ Inizio generazione per ${tabTitleMap[activeTab]} - ${targetDate}...`];
                 
-                const newSchedule: ScheduledShift[] = [];
-                // Pre-fill assignments with existing shifts for the month
                 const staffAssignments: Record<string, Record<string, string>> = {};
-                let existingShiftsCount = 0;
+                const staffStats: Record<string, { totalShifts: number; nightShifts: number }> = {};
+                staffList.forEach(s => staffStats[s.id] = { totalShifts: 0, nightShifts: 0 });
+
+                // --- PASS 0: VINCOLI FISSI (Assenze, riposi obbligatori, turni pre-esistenti) ---
+                log.push("PASS 0: Applicazione vincoli fissi (assenze, riposi, turni esistenti)...");
                 const affectedStaffIds = new Set(staffList.map(s => s.id));
+                
+                // Assenze pianificate
+                plannerAbsences.filter(a => a.date.startsWith(targetDate) && affectedStaffIds.has(a.staffId)).forEach(absence => {
+                    if (!staffAssignments[absence.staffId]) staffAssignments[absence.staffId] = {};
+                    staffAssignments[absence.staffId][absence.date] = absence.shiftCode;
+                });
+                
+                // Turni pre-esistenti
                 scheduledShifts.forEach(shift => {
-                    if (shift.date.startsWith(targetDate) && affectedStaffIds.has(shift.staffId)) {
+                    if (shift.date.startsWith(targetDate) && affectedStaffIds.has(shift.staffId) && !staffAssignments[shift.staffId]?.[shift.date]) {
                         if (!staffAssignments[shift.staffId]) staffAssignments[shift.staffId] = {};
                         staffAssignments[shift.staffId][shift.date] = shift.shiftCode || '';
-                        existingShiftsCount++;
                     }
                 });
-                if (existingShiftsCount > 0) {
-                    log.push(`✅ Rispettati ${existingShiftsCount} turni pre-esistenti in questo mese.`);
+
+                // Riposi Domenicali per H6 e H12
+                for (let day = 1; day <= daysInMonth; day++) {
+                    const date = new Date(year, month - 1, day);
+                    if (date.getDay() === 0) { // Sunday
+                        const dateStr = formatDate(date);
+                        staffList.forEach(staff => {
+                            if ((staff.contract === ContractType.H6 || staff.contract === ContractType.H12) && !staffAssignments[staff.id]?.[dateStr]) {
+                                if (!staffAssignments[staff.id]) staffAssignments[staff.id] = {};
+                                staffAssignments[staff.id][dateStr] = 'RS';
+                            }
+                        });
+                    }
                 }
-    
-                const firstDayOfMonth = new Date(year, month - 1, 1);
-                const lastDayOfPrevMonth = new Date(firstDayOfMonth.getTime() - 86400000);
-                const lastDayOfPrevMonthStr = formatDate(lastDayOfPrevMonth);
-    
-                const h24InitialState: Record<string, string | null> = {};
-                staffList.forEach(staff => {
-                    const lastMonthShift = scheduledShifts.find(s => s.staffId === staff.id && s.date === lastDayOfPrevMonthStr);
-                    h24InitialState[staff.id] = lastMonthShift?.shiftCode || null;
-                });
-    
-                // --- Main Daily Loop ---
+                
+                const generatedUncoveredShifts: ScheduledShift[] = [];
+                const h24Staff = staffList.filter(s => s.contract === ContractType.H24);
+                
+                // --- PASS 1: NOTTI (N) + SMONTO (S) + RIPOSO (R) per H24 ---
+                log.push("PASS 1: Assegnazione Notti (N), Smonti (S) e Riposi (R) al personale H24...");
                 for (let day = 1; day <= daysInMonth; day++) {
                     const date = new Date(year, month - 1, day);
                     const dateStr = formatDate(date);
                     const dayOfWeek = date.getDay();
-                    const prevDateStr = formatDate(new Date(date.getTime() - 86400000));
-    
-                    const dailyNeeds: Record<string, { min: number; max: number; assigned: number }> = {};
-                    relevantShifts.forEach(shiftDef => {
-                        const shiftCode = shiftDef.code;
-                        const override = dateOverrides[shiftCode]?.[dateStr];
-                        let reqValue = override !== undefined ? override : requirements[shiftCode]?.[dayOfWeek];
-                        
-                        if (reqValue !== undefined && reqValue !== null) {
-                            let min = 0, max = 0;
-                            if (typeof reqValue === 'number') { min = max = reqValue; }
-                            else if (typeof reqValue === 'object') { min = reqValue.min; max = reqValue.max; }
-                            
-                            // Count already assigned staff towards the need
-                            let alreadyAssigned = 0;
-                            staffList.forEach(s => {
-                                if (staffAssignments[s.id]?.[dateStr] === shiftCode) {
-                                    alreadyAssigned++;
-                                }
-                            });
-
-                            if (max > 0) {
-                                dailyNeeds[shiftCode] = { min, max, assigned: alreadyAssigned };
-                            }
-                        }
-                    });
-    
-                    let availableStaffIds = new Set(staffList.filter(s => !staffAssignments[s.id]?.[dateStr]).map(s => s.id));
-
-                    const assignShift = (staffId: string, shiftCode: string) => {
-                        if (!staffAssignments[staffId]) staffAssignments[staffId] = {};
-                        staffAssignments[staffId][dateStr] = shiftCode;
-                        availableStaffIds.delete(staffId);
-                        const need = dailyNeeds[shiftCode];
-                        if (need) {
-                            need.assigned++;
-                        }
-                    };
-    
-                    // Pass 1: Mandatory assignments for available staff.
-                    staffList.forEach(staff => {
-                        if (!availableStaffIds.has(staff.id)) return; // Skip if already assigned
-    
-                        const lastShiftCode = staffAssignments[staff.id]?.[prevDateStr] ?? h24InitialState[staff.id];
-    
-                        if (lastShiftCode && getShiftDefinitionByCode(lastShiftCode)?.time === ShiftTime.Night) {
-                            assignShift(staff.id, 'S'); return;
-                        }
-                        if (staff.contract === ContractType.H24 && lastShiftCode === 'S') {
-                            assignShift(staff.id, 'R'); return;
-                        }
-                        if (date.getDay() === 0 && (staff.contract === ContractType.H6 || staff.contract === ContractType.H12)) {
-                            assignShift(staff.id, 'RS'); return;
-                        }
-                    });
-    
-                    const shiftPriorityOrder = Object.keys(dailyNeeds).sort((a,b) => {
-                        const timeA = getShiftDefinitionByCode(a)?.time;
-                        const timeB = getShiftDefinitionByCode(b)?.time;
-                        const prio: Record<string, number> = { [ShiftTime.Night]: 1, [ShiftTime.Afternoon]: 2, [ShiftTime.Morning]: 3, [ShiftTime.FullDay]: 4 };
-                        return (prio[timeA!] || 5) - (prio[timeB!] || 5);
-                    });
-    
-                    // Pass 2: Fill MINIMUM requirements with available staff
-                    shiftPriorityOrder.forEach(shiftCode => {
-                        const need = dailyNeeds[shiftCode];
-                        while (need.assigned < need.min) {
-                            const candidate = staffList.find(s => 
-                                availableStaffIds.has(s.id) && 
-                                isShiftAllowed(shiftCode, s, shiftDefinitions, teams)
-                            );
-    
-                            if (candidate) {
-                                assignShift(candidate.id, shiftCode);
-                            } else {
-                                break;
-                            }
-                        }
-                    });
+                    const need = parseRequirement(String(requirements['N']?.[dayOfWeek] || 0));
+                    let requiredCount = typeof need === 'number' ? need : need.min;
                     
-                    // Pass 3: Assign remaining available staff to fill up to MAX requirements
-                    const remainingStaff = staffList.filter(s => availableStaffIds.has(s.id)).sort(() => Math.random() - 0.5);
-                    remainingStaff.forEach(staff => {
-                        const suitableShift = shiftPriorityOrder.find(shiftCode => {
-                            const need = dailyNeeds[shiftCode];
-                            return need && (need.assigned < need.max) && isShiftAllowed(shiftCode, staff, shiftDefinitions, teams);
-                        });
-                        
-                        if (suitableShift) {
-                            assignShift(staff.id, suitableShift);
-                        }
-                    });
+                    let assignedCount = Object.values(staffAssignments).filter(d => d[dateStr] === 'N').length;
 
-                    // Pass 4: Final check for uncovered shifts.
-                    Object.entries(dailyNeeds).forEach(([shiftCode, need]) => {
-                        if (need.assigned < need.min) {
-                            const deficit = need.min - need.assigned;
-                            log.push(`❌ Fabbisogno MINIMO non coperto per ${shiftCode} il ${dateStr}: mancano ${deficit} unità.`);
-                            for (let i = 0; i < deficit; i++) {
-                                newSchedule.push({ id: `uncovered-${dateStr}-${shiftCode}-${i}`, date: dateStr, staffId: UNASSIGNED_STAFF_ID, shiftCode });
+                    while (assignedCount < requiredCount) {
+                        const candidates = h24Staff.filter(s => {
+                            const day_plus1_str = day + 1 <= daysInMonth ? formatDate(new Date(year, month - 1, day + 1)) : null;
+                            const day_plus2_str = day + 2 <= daysInMonth ? formatDate(new Date(year, month - 1, day + 2)) : null;
+                            return !staffAssignments[s.id]?.[dateStr] && 
+                                   (!day_plus1_str || !staffAssignments[s.id]?.[day_plus1_str]) &&
+                                   (!day_plus2_str || !staffAssignments[s.id]?.[day_plus2_str]);
+                        }).sort((a, b) => staffStats[a.id].nightShifts - staffStats[b.id].nightShifts);
+
+                        if (candidates.length === 0) break;
+                        const staffToAssign = candidates[0];
+
+                        if (!staffAssignments[staffToAssign.id]) staffAssignments[staffToAssign.id] = {};
+                        staffAssignments[staffToAssign.id][dateStr] = 'N';
+                        staffStats[staffToAssign.id].nightShifts++;
+                        
+                        const day_plus1_str = day + 1 <= daysInMonth ? formatDate(new Date(year, month - 1, day + 1)) : null;
+                        if(day_plus1_str) staffAssignments[staffToAssign.id][day_plus1_str] = 'S';
+                        
+                        const day_plus2_str = day + 2 <= daysInMonth ? formatDate(new Date(year, month - 1, day + 2)) : null;
+                        if(day_plus2_str) staffAssignments[staffToAssign.id][day_plus2_str] = 'R';
+                        
+                        assignedCount++;
+                    }
+                }
+
+                // --- PASS 2 & 3: MN/PN per H24, poi H12/H6 ---
+                log.push("PASS 2 & 3: Assegnazione turni di reparto (Mn, Pn)...");
+                ['Mn', 'Pn'].forEach(shiftCode => {
+                    for (let day = 1; day <= daysInMonth; day++) {
+                        const date = new Date(year, month - 1, day);
+                        const dateStr = formatDate(date);
+                        const dayOfWeek = date.getDay();
+                        const need = parseRequirement(String(requirements[shiftCode]?.[dayOfWeek] || 0));
+                        let requiredCount = typeof need === 'number' ? need : need.min;
+                        let assignedCount = Object.values(staffAssignments).filter(d => d[dateStr] === shiftCode).length;
+
+                        const assignToPool = (pool: Staff[]) => {
+                             while (assignedCount < requiredCount) {
+                                const candidates = pool.filter(s => !staffAssignments[s.id]?.[dateStr] && isShiftAllowed(shiftCode, s, shiftDefinitions, teams))
+                                                    .sort((a, b) => staffStats[a.id].totalShifts - staffStats[b.id].totalShifts);
+                                if (candidates.length === 0) break;
+                                const staffToAssign = candidates[0];
+                                if (!staffAssignments[staffToAssign.id]) staffAssignments[staffToAssign.id] = {};
+                                staffAssignments[staffToAssign.id][dateStr] = shiftCode;
+                                staffStats[staffToAssign.id].totalShifts++;
+                                assignedCount++;
                             }
+                        };
+                        
+                        // Pass 2: H24
+                        assignToPool(h24Staff);
+                        
+                        // Pass 3: H12 / H6
+                        if (shiftCode === 'Mn') {
+                            assignToPool(staffList.filter(s => s.contract === ContractType.H12 || s.contract === ContractType.H6));
+                        } else { // Pn
+                            assignToPool(staffList.filter(s => s.contract === ContractType.H12));
+                        }
+                    }
+                });
+
+                // --- PASS 4: TUTTI GLI ALTRI TURNI ---
+                log.push("PASS 4: Completamento del calendario con i turni rimanenti...");
+                const otherShiftCodes = relevantShifts.filter(s => !['N', 'Mn', 'Pn'].includes(s.code)).map(s => s.code);
+                 for (let day = 1; day <= daysInMonth; day++) {
+                    const date = new Date(year, month - 1, day);
+                    const dateStr = formatDate(date);
+                    const dayOfWeek = date.getDay();
+
+                    otherShiftCodes.forEach(shiftCode => {
+                        const need = parseRequirement(String(requirements[shiftCode]?.[dayOfWeek] || 0));
+                        let requiredCount = typeof need === 'number' ? need : need.min;
+                        let assignedCount = Object.values(staffAssignments).filter(d => d[dateStr] === shiftCode).length;
+                        
+                        while(assignedCount < requiredCount) {
+                            const candidates = staffList.filter(s => !staffAssignments[s.id]?.[dateStr] && isShiftAllowed(shiftCode, s, shiftDefinitions, teams))
+                                                    .sort((a,b) => staffStats[a.id].totalShifts - staffStats[b.id].totalShifts);
+                            if (candidates.length === 0) {
+                                 generatedUncoveredShifts.push({ id: `uncovered-${dateStr}-${shiftCode}-${assignedCount}`, date: dateStr, staffId: UNASSIGNED_STAFF_ID, shiftCode });
+                                 log.push(`❌ Fabbisogno non coperto per ${shiftCode} il ${dateStr}.`);
+                                 break;
+                            };
+                            const staffToAssign = candidates[0];
+                            if (!staffAssignments[staffToAssign.id]) staffAssignments[staffToAssign.id] = {};
+                            staffAssignments[staffToAssign.id][dateStr] = shiftCode;
+                            staffStats[staffToAssign.id].totalShifts++;
+                            assignedCount++;
                         }
                     });
                 }
-    
-                // --- Finalization ---
+
+                // --- PASS 5: COPERTURA CON TURNI LUNGHI ---
+                log.push("PASS 5: Tentativo di copertura turni scoperti con turni lunghi...");
+                const preliminarySchedule: ScheduledShift[] = [];
                 Object.entries(staffAssignments).forEach(([staffId, assignments]) => {
                     Object.entries(assignments).forEach(([date, shiftCode]) => {
-                        newSchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode: shiftCode || null });
+                        preliminarySchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode: shiftCode || null });
                     });
                 });
-    
+                
+                const coveredUncoveredShiftIds = new Set<string>();
+                let coveredCount = 0;
+                const longShiftCounts: Record<string, number> = {};
+                staffList.forEach(s => longShiftCounts[s.id] = 0);
+                
+                const uncoveredShiftsToProcess = generatedUncoveredShifts.slice();
+
+                uncoveredShiftsToProcess.forEach(uncoveredShift => {
+                    const uncoveredShiftDef = getShiftDefinitionByCode(uncoveredShift.shiftCode!);
+                    if (!uncoveredShiftDef) return;
+
+                    const complementaryTime = 
+                        uncoveredShiftDef.time === ShiftTime.Morning ? ShiftTime.Afternoon :
+                        uncoveredShiftDef.time === ShiftTime.Afternoon ? ShiftTime.Morning : null;
+                    if (!complementaryTime) return;
+
+                    const candidates = staffList.filter(staff => {
+                        if (staff.contract !== ContractType.H12 && staff.contract !== ContractType.H24) return false;
+                        if (!isShiftAllowed(uncoveredShift.shiftCode!, staff, shiftDefinitions, teams)) return false;
+                        const existingShiftCode = staffAssignments[staff.id]?.[uncoveredShift.date];
+                        if (!existingShiftCode || existingShiftCode.includes('/')) return false;
+                        const existingShiftDef = getShiftDefinitionByCode(existingShiftCode);
+                        return existingShiftDef?.time === complementaryTime;
+                    });
+
+                    if (candidates.length > 0) {
+                        candidates.sort((a, b) => (longShiftCounts[a.id] || 0) - (longShiftCounts[b.id] || 0));
+                        const bestCandidate = candidates[0];
+                        
+                        const originalShiftCode = staffAssignments[bestCandidate.id][uncoveredShift.date];
+                        const newShiftCode = uncoveredShiftDef.time === ShiftTime.Afternoon
+                            ? `${originalShiftCode}/${uncoveredShift.shiftCode}`
+                            : `${uncoveredShift.shiftCode}/${originalShiftCode}`;
+                        
+                        staffAssignments[bestCandidate.id][uncoveredShift.date] = newShiftCode;
+                        
+                        coveredUncoveredShiftIds.add(uncoveredShift.id);
+                        longShiftCounts[bestCandidate.id]++;
+                        coveredCount++;
+                    }
+                });
+                if (coveredCount > 0) log.push(`👍 Coperti ${coveredCount} turni scoperti tramite turni lunghi.`);
+
+                const finalSchedule: ScheduledShift[] = [];
+                Object.entries(staffAssignments).forEach(([staffId, assignments]) => {
+                    Object.entries(assignments).forEach(([date, shiftCode]) => {
+                        finalSchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode: shiftCode || null });
+                    });
+                });
+                generatedUncoveredShifts.forEach(s => {
+                    if (!coveredUncoveredShiftIds.has(s.id)) {
+                        finalSchedule.push(s);
+                    }
+                });
+
                 log.push(`✅ Generazione completata.`);
                 setGenerationLog(log);
-                onGenerateSchedule(newSchedule, targetDate, [...staffList.map(s => s.id), UNASSIGNED_STAFF_ID]);
+                onGenerateSchedule(finalSchedule, targetDate, [...staffList.map(s => s.id), UNASSIGNED_STAFF_ID]);
             
             } catch (error) {
                 console.error("Errore durante la generazione dei turni:", error);
@@ -730,7 +863,7 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                 setIsConfirming(false);
             }
         }, 500);
-    }, [activeTab, targetDate, requirements, staffList, scheduledShifts, getShiftDefinitionByCode, onGenerateSchedule, shiftDefinitions, teams, dateOverrides, relevantShifts]);
+    }, [activeTab, targetDate, requirements, staffList, scheduledShifts, getShiftDefinitionByCode, onGenerateSchedule, shiftDefinitions, teams, dateOverrides, plannerAbsences, relevantShifts]);
 
 
     const selectedPresetIsDefault = useMemo(() => {
@@ -754,6 +887,49 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
         return codes;
     }, [dateOverrides, targetDate]);
 
+    const renderAbsenceCalendar = () => {
+        const [year, month] = targetDate.split('-').map(Number);
+        const firstDayOfMonth = new Date(year, month - 1, 1).getDay(); // Sunday is 0
+        const daysInMonth = new Date(year, month, 0).getDate();
+    
+        const blanks = Array.from({ length: firstDayOfMonth });
+        const daysInCalendar = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+    
+        const weekdays = ['Dom', 'Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab'];
+    
+        return (
+            <div>
+                <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-gray-500 mb-2">
+                    {weekdays.map(day => <div key={day}>{day}</div>)}
+                </div>
+                <div className="grid grid-cols-7 gap-1">
+                    {blanks.map((_, index) => <div key={`blank-${index}`} />)}
+                    {daysInCalendar.map(day => {
+                        const dateStr = `${targetDate}-${day.toString().padStart(2, '0')}`;
+                        const isSelected = selectedAbsenceDates.includes(dateStr);
+                        const isExistingAbsence = currentMonthAbsences.some(a => a.date === dateStr && a.staffId === absenceStaffId);
+    
+                        return (
+                            <button
+                                key={day}
+                                type="button"
+                                disabled={isExistingAbsence}
+                                onClick={() => handleAbsenceDateToggle(dateStr)}
+                                className={`w-full h-9 rounded text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+                                    ${isSelected ? 'bg-blue-600 text-white ring-2 ring-blue-300' :
+                                     isExistingAbsence ? 'bg-gray-300 text-gray-500' :
+                                     'bg-gray-100 text-gray-700 hover:bg-blue-100'
+                                    }`}
+                                title={isExistingAbsence ? `${staffMap.get(absenceStaffId)} ha già un'assenza in questo giorno` : ''}
+                            >
+                                {day}
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+        );
+    };
 
     return (
         <div className="space-y-8">
@@ -872,7 +1048,7 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                             {relevantShifts.map(shift => {
                                 const hasOverride = shiftsWithMonthlyOverrides.has(shift.code);
                                 const cellTitle = hasOverride 
-                                    ? `${shift.description} - Contiene eccezioni per giorni singoli in questo mese.` 
+                                    ? `${shift.description} - Contiene eccezioni for giorni singoli in questo mese.` 
                                     : shift.description;
                                 
                                 return (
@@ -940,9 +1116,74 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                     </button>
                 </div>
             </div>
+
+            <div className="bg-white p-6 rounded-lg shadow-md">
+                <h3 className="text-xl font-bold text-gray-700 mb-4">2. Permessi e Malattie da Includere</h3>
+                <p className="text-sm text-gray-600 mb-4">Aggiungi qui le assenze (ferie, malattia, permessi) che non sono state inserite tramite la funzione "Segnala Assenza". Queste verranno considerate come vincoli fissi durante la generazione del calendario.</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="p-4 bg-gray-50 rounded-lg border">
+                        <h4 className="font-semibold text-gray-800 mb-3">Aggiungi Assenza</h4>
+                        <div className="space-y-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label htmlFor="absence-staff" className="block text-sm font-medium text-gray-700 mb-1">Personale</label>
+                                    <select id="absence-staff" value={absenceStaffId} onChange={e => setAbsenceStaffId(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                        <option value="">-- Seleziona --</option>
+                                        {staffList.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label htmlFor="absence-code" className="block text-sm font-medium text-gray-700 mb-1">Tipo Assenza</label>
+                                    <select id="absence-code" value={absenceCode} onChange={e => setAbsenceCode(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                        {absenceShiftDefs.map(def => <option key={def.code} value={def.code}>{def.description} ({def.code})</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Seleziona i giorni</label>
+                                <div className="p-2 border bg-white rounded-md">
+                                    {renderAbsenceCalendar()}
+                                </div>
+                            </div>
+                            <button onClick={handleAddAbsence} className="w-full flex justify-center items-center px-4 py-2 bg-green-600 text-white rounded-md shadow-sm hover:bg-green-700 transition-colors focus:outline-none focus:ring-2 focus:ring-green-500">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                                </svg>
+                                Aggiungi Assenza/e ({selectedAbsenceDates.length})
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div className="p-4 bg-gray-50 rounded-lg border">
+                        <h4 className="font-semibold text-gray-800 mb-3">Assenze Inserite ({currentMonthAbsences.length})</h4>
+                        <div className="max-h-80 overflow-y-auto space-y-2 pr-2">
+                            {currentMonthAbsences.length > 0 ? (
+                                currentMonthAbsences.map(absence => (
+                                    <div key={`${absence.staffId}-${absence.date}`} className="flex justify-between items-center bg-white p-2 rounded-md shadow-sm border border-gray-200">
+                                        <div>
+                                            <p className="font-semibold text-sm text-gray-800">{staffMap.get(absence.staffId)}</p>
+                                            <p className="text-xs text-gray-500">{new Date(absence.date + 'T12:00:00').toLocaleDateString('it-IT', { day: '2-digit', month: 'long' })} - {getShiftDefinitionByCode(absence.shiftCode)?.description}</p>
+                                        </div>
+                                        <button onClick={() => handleRemoveAbsence(absence.staffId, absence.date)} className="p-1 text-red-500 hover:bg-red-100 rounded-full transition-colors" aria-label="Rimuovi assenza">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                              <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="flex items-center justify-center h-full">
+                                    <p className="text-sm text-gray-500 text-center pt-8">Nessuna assenza aggiunta per questo mese.</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
             
             <div className="bg-white p-6 rounded-lg shadow-md">
-                 <h3 className="text-xl font-bold text-gray-700 mb-4">2. Genera Calendario</h3>
+                 <h3 className="text-xl font-bold text-gray-700 mb-4">3. Genera Calendario</h3>
                  <div className="flex flex-col sm:flex-row items-start gap-4">
                     <div className="flex items-center space-x-4">
                         <label htmlFor="month-picker" className="font-medium text-gray-700">Mese:</label>
@@ -964,7 +1205,7 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                     </svg>}
-                                    {isGenerating ? 'Generazione...' : 'Conferma e Completa'}
+                                    {isGenerating ? 'Generazione...' : 'Conferma e Sovrascrivi'}
                                 </button>
                                 <button onClick={() => setIsConfirming(false)} disabled={isGenerating}
                                         className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition-colors">
@@ -974,6 +1215,11 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                         )}
                     </div>
                 </div>
+                {isConfirming && !isGenerating && (
+                    <div className="mt-4 p-4 bg-yellow-50 border border-yellow-300 rounded-lg text-yellow-800 text-sm">
+                        <p><strong>Attenzione:</strong> La generazione di un nuovo calendario sovrascriverà tutti i turni esistenti per il personale di tipo "{tabTitleMap[activeTab]}" nel mese di {new Date(targetDate + '-02').toLocaleString('it-IT', { month: 'long', year: 'numeric' })}. Clicca su "Conferma e Sovrascrivi" per procedere.</p>
+                    </div>
+                )}
 
                 {(isGenerating || generationLog.length > 0) && (
                     <div className="mt-6">

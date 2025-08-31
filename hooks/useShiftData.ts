@@ -14,7 +14,6 @@ const generateInitialSchedule = (): ScheduledShift[] => {
     const year = today.getFullYear();
     const month = today.getMonth();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const restShifts = ['RS', 'S', 'R'];
 
     const allShiftDefinitions = [...INITIAL_SHIFT_DEFINITIONS]; 
 
@@ -30,25 +29,46 @@ const generateInitialSchedule = (): ScheduledShift[] => {
             )
             .map(def => def.code);
 
-        let restCounter = 0;
+        let previousShiftCode: string | null = null; // Track previous day's shift
+
         for (let day = 1; day <= daysInMonth; day++) {
             const date = new Date(year, month, day);
             const dateStr = formatDate(date);
             
             let shiftCode: string | null = null;
-            if (restCounter > 0) {
-                shiftCode = restShifts[restCounter-1] || 'RS';
-                restCounter--;
-            } else if (date.getDay() === 0 || date.getDay() === 6) { // Weekend
-                shiftCode = 'RS';
-            } else if (allowedWorkingShifts.length > 0) {
-                 shiftCode = allowedWorkingShifts[Math.floor(Math.random() * allowedWorkingShifts.length)];
-            } else {
-                 shiftCode = 'R';
+
+            // --- CORRECTED LOGIC ---
+            // H24 staff rotation: Night -> Post-night -> Rest
+            if (staff.contract === ContractEnum.H24) {
+                if (previousShiftCode === 'N') {
+                    shiftCode = 'S';
+                } else if (previousShiftCode === 'S') {
+                    shiftCode = 'R';
+                }
             }
-             if (Math.random() < 0.05) {
+
+            // H6 & H12 staff have rest on Sundays
+            if (staff.contract === ContractEnum.H6 || staff.contract === ContractEnum.H12) {
+                if (date.getDay() === 0) { // Sunday
+                    shiftCode = 'RS';
+                }
+            }
+            
+            // If no specific rule assigned a shift, assign a random working shift
+            if (shiftCode === null) {
+                if (allowedWorkingShifts.length > 0) {
+                     shiftCode = allowedWorkingShifts[Math.floor(Math.random() * allowedWorkingShifts.length)];
+                } else {
+                     // Fallback if no working shifts are possible (e.g., wrong team setup)
+                     shiftCode = 'R';
+                }
+            }
+
+            // Add some random days off (Ferie) to make it more realistic, but don't override mandatory rests
+             if (Math.random() < 0.05 && shiftCode !== 'S' && shiftCode !== 'R') {
                  shiftCode = 'FE';
              }
+            // --- END CORRECTED LOGIC ---
 
             schedule.push({
                 id: `${staff.id}-${dateStr}`,
@@ -56,6 +76,8 @@ const generateInitialSchedule = (): ScheduledShift[] => {
                 date: dateStr,
                 shiftCode: shiftCode,
             });
+
+            previousShiftCode = shiftCode; // Update for the next day's logic
         }
     });
     

@@ -65,6 +65,7 @@ export interface Staff {
     hasLaw104?: boolean;
     specialRules?: string;
     unavailableShiftCodes?: string[];
+    nightSquad?: number; // 1 to 5 for H24 night squads
 }
 
 export interface ShiftDefinition {

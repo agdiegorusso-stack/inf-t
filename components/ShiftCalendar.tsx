@@ -1,9 +1,12 @@
 
+
+
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import type { Staff, ScheduledShift, ShiftDefinition, Team } from '../types';
 import { UNASSIGNED_STAFF_ID } from '../constants';
 import { ShiftTime, StaffRole, ContractType } from '../types';
 import { getAllowedShifts } from '../utils/shiftUtils';
+import { RoleAndSquadIcons } from './RoleAndSquadIcons';
 
 interface ShiftCalendarProps {
     currentDate: Date;
@@ -185,23 +188,38 @@ export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staff
     });
 
     const sortedStaff = useMemo(() => {
-        const roleOrder: Record<StaffRole, number> = {
-            [StaffRole.HeadNurse]: 1,
-            [StaffRole.Nurse]: 2,
-            [StaffRole.Doctor]: 3,
-            [StaffRole.OSS]: 4,
+        // Custom sorting logic based on user request for nurse view
+        const getGroupPriority = (staff: Staff): number => {
+            if (staff.role === StaffRole.HeadNurse) return 1;
+            if (staff.contract === ContractType.H6) return 2;
+            if (staff.contract === ContractType.H12) return 3;
+            if (staff.contract === ContractType.H24) return 4;
+            // Fallback for other roles if they appear in the list
+            if (staff.role === StaffRole.Doctor) return 5;
+            if (staff.role === StaffRole.OSS) return 6;
+            return 99;
         };
-        
+
         return [...staffList]
             .filter(s => s.id !== UNASSIGNED_STAFF_ID)
             .sort((a, b) => {
-                const orderA = roleOrder[a.role] ?? 99;
-                const orderB = roleOrder[b.role] ?? 99;
-                
-                if (orderA !== orderB) {
-                    return orderA - orderB;
+                const priorityA = getGroupPriority(a);
+                const priorityB = getGroupPriority(b);
+        
+                if (priorityA !== priorityB) {
+                    return priorityA - priorityB;
+                }
+        
+                // Within H24 group, sort by squad then by name
+                if (priorityA === 4) { // This means both are H24
+                    const squadA = a.nightSquad || 99; // Staff without a squad go to the end
+                    const squadB = b.nightSquad || 99;
+                    if (squadA !== squadB) {
+                        return squadA - squadB;
+                    }
                 }
                 
+                // For all other groups, and within H24 squads, sort by name
                 return a.name.localeCompare(b.name);
             });
     }, [staffList]);
@@ -233,11 +251,12 @@ export const ShiftCalendar: React.FC<ShiftCalendarProps> = ({ currentDate, staff
                     {sortedStaff.map(staff => (
                         <React.Fragment key={staff.id}>
                             <div 
-                                className="sticky left-0 bg-white z-10 p-2 text-sm font-medium text-gray-800 border-t border-gray-200 flex items-center truncate cursor-pointer hover:bg-gray-100 transition-colors"
+                                className="sticky left-0 bg-white z-10 p-2 text-sm font-medium text-gray-800 border-t border-gray-200 flex items-center justify-between space-x-2 truncate cursor-pointer hover:bg-gray-100 transition-colors"
                                 title={`${staff.name} - Clicca per gestire`}
                                 onClick={() => onOpenStaffDetail(staff)}
                             >
-                                {staff.name}
+                                <span className="truncate">{staff.name}</span>
+                                <RoleAndSquadIcons staff={staff} />
                             </div>
                             {days.map(day => {
                                 const dateStr = `${year}-${(month + 1).toString().padStart(2, '0')}-${day.dayOfMonth.toString().padStart(2, '0')}`;

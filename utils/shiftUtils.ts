@@ -1,7 +1,3 @@
-
-
-
-
 import { ContractType, ShiftTime, ShiftDefinition, StaffRole, Staff, Team } from '../types';
 import { LONG_SHIFTS } from '../constants';
 
@@ -59,7 +55,11 @@ export const isShiftAllowed = (shiftCode: string, staff: Staff, shiftDefinitions
             return shiftDef.time !== ShiftTime.Night && shiftDef.code !== 'S';
             
         case ContractType.H24:
-            return true;
+            // H24 staff are contractually able to work morning, afternoon, and night shifts as part of their rotation.
+            // This function checks general eligibility, while the planner enforces the specific M-P-N-S-R cycle.
+            return shiftDef.time === ShiftTime.Morning || 
+                   shiftDef.time === ShiftTime.Afternoon || 
+                   shiftDef.time === ShiftTime.Night;
             
         default:
             return false;

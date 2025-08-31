@@ -57,7 +57,10 @@ const formatRequirement = (req: ShiftRequirementValue | undefined): string => {
 };
 
 // Helper to parse requirement value from input string
-const parseRequirement = (value: string): ShiftRequirementValue => {
+const parseRequirement = (value: string | number | {min: number, max: number}): ShiftRequirementValue => {
+    if (typeof value === 'object') return value;
+    if (typeof value === 'number') return value;
+
     const trimmed = value.trim().replace(/[()]/g, ''); // Remove parentheses before parsing
     if (trimmed.includes('-')) {
         const parts = trimmed.split('-').map(p => parseInt(p.trim(), 10));
@@ -637,222 +640,176 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
     const handleGenerate = useCallback(() => {
         setIsGenerating(true);
         setGenerationLog([]);
-
+    
         setTimeout(() => {
             try {
                 const [year, month] = targetDate.split('-').map(Number);
                 const daysInMonth = new Date(year, month, 0).getDate();
                 const log: string[] = [`ℹ️ Inizio generazione per ${tabTitleMap[activeTab]} - ${targetDate}...`];
-                
+    
                 const staffAssignments: Record<string, Record<string, string>> = {};
-                const staffStats: Record<string, { totalShifts: number; nightShifts: number }> = {};
-                staffList.forEach(s => staffStats[s.id] = { totalShifts: 0, nightShifts: 0 });
-
-                // --- PASS 0: VINCOLI FISSI (Assenze, riposi obbligatori, turni pre-esistenti) ---
-                log.push("PASS 0: Applicazione vincoli fissi (assenze, riposi, turni esistenti)...");
+                const staffStats: Record<string, { totalShifts: number; nightShifts: number; longShifts: number }> = {};
+                staffList.forEach(s => staffStats[s.id] = { totalShifts: 0, nightShifts: 0, longShifts: 0 });
+    
+                const assignShift = (staffId: string, dateStr: string, shiftCode: string) => {
+                    if (!staffAssignments[staffId]) staffAssignments[staffId] = {};
+                    staffAssignments[staffId][dateStr] = shiftCode;
+                    staffStats[staffId].totalShifts++;
+                    const shiftDef = getShiftDefinitionByCode(shiftCode);
+                    if (shiftDef?.time === ShiftTime.Night) {
+                        staffStats[staffId].nightShifts++;
+                    }
+                    if (shiftCode.includes('/')) {
+                        staffStats[staffId].longShifts++;
+                    }
+                };
+    
+                // --- PASS 0: VINCOLI FISSI (Solo assenze dal planner) ---
+                log.push("PASS 0: Applicazione vincoli fissi (assenze definite nel planner)...");
                 const affectedStaffIds = new Set(staffList.map(s => s.id));
-                
-                // Assenze pianificate
+    
+                staffList.forEach(s => { staffAssignments[s.id] = {}; });
+    
+                // Applica solo le assenze definite esplicitamente nel planner UI.
                 plannerAbsences.filter(a => a.date.startsWith(targetDate) && affectedStaffIds.has(a.staffId)).forEach(absence => {
-                    if (!staffAssignments[absence.staffId]) staffAssignments[absence.staffId] = {};
                     staffAssignments[absence.staffId][absence.date] = absence.shiftCode;
                 });
-                
-                // Turni pre-esistenti
-                scheduledShifts.forEach(shift => {
-                    if (shift.date.startsWith(targetDate) && affectedStaffIds.has(shift.staffId) && !staffAssignments[shift.staffId]?.[shift.date]) {
-                        if (!staffAssignments[shift.staffId]) staffAssignments[shift.staffId] = {};
-                        staffAssignments[shift.staffId][shift.date] = shift.shiftCode || '';
-                    }
-                });
-
-                // Riposi Domenicali per H6 e H12
-                for (let day = 1; day <= daysInMonth; day++) {
-                    const date = new Date(year, month - 1, day);
-                    if (date.getDay() === 0) { // Sunday
-                        const dateStr = formatDate(date);
-                        staffList.forEach(staff => {
-                            if ((staff.contract === ContractType.H6 || staff.contract === ContractType.H12) && !staffAssignments[staff.id]?.[dateStr]) {
-                                if (!staffAssignments[staff.id]) staffAssignments[staff.id] = {};
-                                staffAssignments[staff.id][dateStr] = 'RS';
-                            }
-                        });
-                    }
-                }
-                
-                const generatedUncoveredShifts: ScheduledShift[] = [];
-                const h24Staff = staffList.filter(s => s.contract === ContractType.H24);
-                
-                // --- PASS 1: NOTTI (N) + SMONTO (S) + RIPOSO (R) per H24 ---
-                log.push("PASS 1: Assegnazione Notti (N), Smonti (S) e Riposi (R) al personale H24...");
-                for (let day = 1; day <= daysInMonth; day++) {
-                    const date = new Date(year, month - 1, day);
-                    const dateStr = formatDate(date);
-                    const dayOfWeek = date.getDay();
-                    const need = parseRequirement(String(requirements['N']?.[dayOfWeek] || 0));
-                    let requiredCount = typeof need === 'number' ? need : need.min;
+    
+                // BUG FIX: Rimuovo il caricamento dei turni pre-esistenti.
+                // La generazione deve partire da una tabula rasa per applicare le nuove regole,
+                // altrimenti i turni esistenti (spesso casuali) bloccano l'applicazione delle rotazioni corrette.
+                // scheduledShifts.forEach(shift => {
+                //     if (shift.date.startsWith(targetDate) && affectedStaffIds.has(shift.staffId) && !staffAssignments[shift.staffId]?.[shift.date]) {
+                //         staffAssignments[shift.staffId][shift.date] = shift.shiftCode || '';
+                //     }
+                // });
+    
+                // --- PASS 1: H24 NIGHT SQUAD ROTATION (Nurses Only) ---
+                if (activeTab === 'nurses') {
+                    log.push("PASS 1: Applicazione rotazione a 5 squadre per Infermieri H24...");
+                    const h24Staff = staffList.filter(s => s.contract === ContractType.H24);
                     
-                    let assignedCount = Object.values(staffAssignments).filter(d => d[dateStr] === 'N').length;
-
-                    while (assignedCount < requiredCount) {
-                        const candidates = h24Staff.filter(s => {
-                            const day_plus1_str = day + 1 <= daysInMonth ? formatDate(new Date(year, month - 1, day + 1)) : null;
-                            const day_plus2_str = day + 2 <= daysInMonth ? formatDate(new Date(year, month - 1, day + 2)) : null;
-                            return !staffAssignments[s.id]?.[dateStr] && 
-                                   (!day_plus1_str || !staffAssignments[s.id]?.[day_plus1_str]) &&
-                                   (!day_plus2_str || !staffAssignments[s.id]?.[day_plus2_str]);
-                        }).sort((a, b) => staffStats[a.id].nightShifts - staffStats[b.id].nightShifts);
-
-                        if (candidates.length === 0) break;
-                        const staffToAssign = candidates[0];
-
-                        if (!staffAssignments[staffToAssign.id]) staffAssignments[staffToAssign.id] = {};
-                        staffAssignments[staffToAssign.id][dateStr] = 'N';
-                        staffStats[staffToAssign.id].nightShifts++;
+                    if (h24Staff.length > 0) {
+                        // This is the core 5-day cycle: Night -> Post-night -> Rest -> Ward Morning -> Ward Afternoon
+                        const WORK_PATTERN = ['N', 'S', 'R', 'Mn', 'Pn'];
+                        // These offsets stagger the pattern for each squad to ensure the "night on day X for squad X" rule is met.
+                        const SQUAD_OFFSETS: { [key: number]: number } = { 1: 0, 2: 4, 3: 3, 4: 2, 5: 1 };
                         
-                        const day_plus1_str = day + 1 <= daysInMonth ? formatDate(new Date(year, month - 1, day + 1)) : null;
-                        if(day_plus1_str) staffAssignments[staffToAssign.id][day_plus1_str] = 'S';
-                        
-                        const day_plus2_str = day + 2 <= daysInMonth ? formatDate(new Date(year, month - 1, day + 2)) : null;
-                        if(day_plus2_str) staffAssignments[staffToAssign.id][day_plus2_str] = 'R';
-                        
-                        assignedCount++;
-                    }
-                }
-
-                // --- PASS 2 & 3: MN/PN per H24, poi H12/H6 ---
-                log.push("PASS 2 & 3: Assegnazione turni di reparto (Mn, Pn)...");
-                ['Mn', 'Pn'].forEach(shiftCode => {
-                    for (let day = 1; day <= daysInMonth; day++) {
-                        const date = new Date(year, month - 1, day);
-                        const dateStr = formatDate(date);
-                        const dayOfWeek = date.getDay();
-                        const need = parseRequirement(String(requirements[shiftCode]?.[dayOfWeek] || 0));
-                        let requiredCount = typeof need === 'number' ? need : need.min;
-                        let assignedCount = Object.values(staffAssignments).filter(d => d[dateStr] === shiftCode).length;
-
-                        const assignToPool = (pool: Staff[]) => {
-                             while (assignedCount < requiredCount) {
-                                const candidates = pool.filter(s => !staffAssignments[s.id]?.[dateStr] && isShiftAllowed(shiftCode, s, shiftDefinitions, teams))
-                                                    .sort((a, b) => staffStats[a.id].totalShifts - staffStats[b.id].totalShifts);
-                                if (candidates.length === 0) break;
-                                const staffToAssign = candidates[0];
-                                if (!staffAssignments[staffToAssign.id]) staffAssignments[staffToAssign.id] = {};
-                                staffAssignments[staffToAssign.id][dateStr] = shiftCode;
-                                staffStats[staffToAssign.id].totalShifts++;
-                                assignedCount++;
+                        const h24WithSquad = h24Staff.filter(s => s.nightSquad && s.nightSquad >= 1 && s.nightSquad <= 5);
+                        log.push(`✅ Trovati ${h24WithSquad.length} infermieri H24 con una squadra assegnata.`);
+    
+                        for (let day = 1; day <= daysInMonth; day++) {
+                            const date = new Date(year, month - 1, day);
+                            const dateStr = formatDate(date);
+    
+                            for (const member of h24WithSquad) {
+                                const squadNum = member.nightSquad!;
+                                
+                                const offset = SQUAD_OFFSETS[squadNum];
+                                const patternIndex = ((day - 1) + offset) % WORK_PATTERN.length;
+                                const shiftCode = WORK_PATTERN[patternIndex];
+                                
+                                // Only assign if no fixed shift (like an absence) is already there.
+                                if (!staffAssignments[member.id]?.[dateStr]) {
+                                    assignShift(member.id, dateStr, shiftCode);
+                                }
                             }
-                        };
-                        
-                        // Pass 2: H24
-                        assignToPool(h24Staff);
-                        
-                        // Pass 3: H12 / H6
-                        if (shiftCode === 'Mn') {
-                            assignToPool(staffList.filter(s => s.contract === ContractType.H12 || s.contract === ContractType.H6));
-                        } else { // Pn
-                            assignToPool(staffList.filter(s => s.contract === ContractType.H12));
                         }
+                    } else {
+                        log.push("⚠️ Nessun infermiere H24 trovato in questa categoria. Salto PASS 1.");
                     }
-                });
+                } else {
+                    log.push(`ℹ️ La rotazione fissa H24 è definita solo per gli infermieri. Per ${tabTitleMap[activeTab]}, i turni verranno assegnati in base al fabbisogno.`);
+                }
+    
+                // --- PASS 2: ASSEGNAZIONE TURNI PER COPERTURA FABBISOGNO ---
+                log.push("PASS 2: Assegnazione turni per coprire il fabbisogno rimanente...");
+                 const getRequirementForDay = (shiftCode: string, dayOfWeek: number, dateStr: string): {min: number, max: number} => {
+                    const override = dateOverrides[shiftCode]?.[dateStr];
+                    if(override !== undefined) return typeof override === 'number' ? {min: override, max: override} : override;
+                    
+                    const weeklyReq = requirements[shiftCode]?.[dayOfWeek];
+                    if(weeklyReq !== undefined) return typeof weeklyReq === 'number' ? {min: weeklyReq, max: weeklyReq} : weeklyReq;
+                    
+                    return {min: 0, max: 0};
+                };
+                
+                 const shiftCodesToFill = relevantShifts
+                    .filter(s => [ShiftTime.Morning, ShiftTime.Afternoon, ShiftTime.Night, ShiftTime.FullDay].includes(s.time))
+                    .map(s => s.code);
 
-                // --- PASS 4: TUTTI GLI ALTRI TURNI ---
-                log.push("PASS 4: Completamento del calendario con i turni rimanenti...");
-                const otherShiftCodes = relevantShifts.filter(s => !['N', 'Mn', 'Pn'].includes(s.code)).map(s => s.code);
                  for (let day = 1; day <= daysInMonth; day++) {
                     const date = new Date(year, month - 1, day);
                     const dateStr = formatDate(date);
                     const dayOfWeek = date.getDay();
 
-                    otherShiftCodes.forEach(shiftCode => {
-                        const need = parseRequirement(String(requirements[shiftCode]?.[dayOfWeek] || 0));
-                        let requiredCount = typeof need === 'number' ? need : need.min;
+                    for (const shiftCode of shiftCodesToFill) {
+                        const { min: requiredCount } = getRequirementForDay(shiftCode, dayOfWeek, dateStr);
                         let assignedCount = Object.values(staffAssignments).filter(d => d[dateStr] === shiftCode).length;
                         
-                        while(assignedCount < requiredCount) {
-                            const candidates = staffList.filter(s => !staffAssignments[s.id]?.[dateStr] && isShiftAllowed(shiftCode, s, shiftDefinitions, teams))
-                                                    .sort((a,b) => staffStats[a.id].totalShifts - staffStats[b.id].totalShifts);
-                            if (candidates.length === 0) {
-                                 generatedUncoveredShifts.push({ id: `uncovered-${dateStr}-${shiftCode}-${assignedCount}`, date: dateStr, staffId: UNASSIGNED_STAFF_ID, shiftCode });
-                                 log.push(`❌ Fabbisogno non coperto per ${shiftCode} il ${dateStr}.`);
-                                 break;
-                            };
-                            const staffToAssign = candidates[0];
-                            if (!staffAssignments[staffToAssign.id]) staffAssignments[staffToAssign.id] = {};
-                            staffAssignments[staffToAssign.id][dateStr] = shiftCode;
-                            staffStats[staffToAssign.id].totalShifts++;
-                            assignedCount++;
+                        if (assignedCount < requiredCount) {
+                            // Find staff who are free on this day and are allowed to do this shift
+                            const candidates = staffList.filter(s => 
+                                !staffAssignments[s.id]?.[dateStr] && 
+                                isShiftAllowed(shiftCode, s, shiftDefinitions, teams)
+                            ).sort((a,b) => staffStats[a.id].totalShifts - staffStats[b.id].totalShifts); // Prioritize those with fewer shifts
+
+                            for (const staffToAssign of candidates) {
+                                if (assignedCount >= requiredCount) break;
+                                assignShift(staffToAssign.id, dateStr, shiftCode);
+                                assignedCount++;
+                            }
+                        }
+                    }
+                }
+    
+                // --- PASS FINALE: VERIFICA COPERTURA E CREAZIONE TURNI SCOPERTI ---
+                log.push("PASS FINALE: Verifica della copertura totale e creazione turni scoperti...");
+                const finalSchedule: ScheduledShift[] = [];
+                const finalUncoveredShifts: ScheduledShift[] = [];
+    
+                for (let day = 1; day <= daysInMonth; day++) {
+                    const date = new Date(year, month - 1, day);
+                    const dateStr = formatDate(date);
+                    const dayOfWeek = date.getDay();
+    
+                    for (const shift of relevantShifts) {
+                        const shiftCode = shift.code;
+                        const { min: requiredCount } = getRequirementForDay(shiftCode, dayOfWeek, dateStr);
+    
+                        if (requiredCount <= 0) continue;
+    
+                        const assignedCount = staffList.reduce((count, staff) => {
+                            const assignedShift = staffAssignments[staff.id]?.[dateStr];
+                            if (assignedShift && assignedShift.includes(shiftCode)) {
+                                return count + 1;
+                            }
+                            return count;
+                        }, 0);
+    
+                        if (assignedCount < requiredCount) {
+                            const deficit = requiredCount - assignedCount;
+                            log.push(`❌ Fabbisogno non coperto per ${shiftCode} il ${dateStr}. Mancano ${deficit} unità.`);
+                            for (let i = 0; i < deficit; i++) {
+                                finalUncoveredShifts.push({ id: `uncovered-${dateStr}-${shiftCode}-${i}`, date: dateStr, staffId: UNASSIGNED_STAFF_ID, shiftCode });
+                            }
+                        }
+                    }
+                }
+    
+                Object.entries(staffAssignments).forEach(([staffId, assignments]) => {
+                    Object.entries(assignments).forEach(([date, shiftCode]) => {
+                        if (shiftCode) {
+                             finalSchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode: shiftCode || null });
                         }
                     });
-                }
-
-                // --- PASS 5: COPERTURA CON TURNI LUNGHI ---
-                log.push("PASS 5: Tentativo di copertura turni scoperti con turni lunghi...");
-                const preliminarySchedule: ScheduledShift[] = [];
-                Object.entries(staffAssignments).forEach(([staffId, assignments]) => {
-                    Object.entries(assignments).forEach(([date, shiftCode]) => {
-                        preliminarySchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode: shiftCode || null });
-                    });
                 });
                 
-                const coveredUncoveredShiftIds = new Set<string>();
-                let coveredCount = 0;
-                const longShiftCounts: Record<string, number> = {};
-                staffList.forEach(s => longShiftCounts[s.id] = 0);
-                
-                const uncoveredShiftsToProcess = generatedUncoveredShifts.slice();
-
-                uncoveredShiftsToProcess.forEach(uncoveredShift => {
-                    const uncoveredShiftDef = getShiftDefinitionByCode(uncoveredShift.shiftCode!);
-                    if (!uncoveredShiftDef) return;
-
-                    const complementaryTime = 
-                        uncoveredShiftDef.time === ShiftTime.Morning ? ShiftTime.Afternoon :
-                        uncoveredShiftDef.time === ShiftTime.Afternoon ? ShiftTime.Morning : null;
-                    if (!complementaryTime) return;
-
-                    const candidates = staffList.filter(staff => {
-                        if (staff.contract !== ContractType.H12 && staff.contract !== ContractType.H24) return false;
-                        if (!isShiftAllowed(uncoveredShift.shiftCode!, staff, shiftDefinitions, teams)) return false;
-                        const existingShiftCode = staffAssignments[staff.id]?.[uncoveredShift.date];
-                        if (!existingShiftCode || existingShiftCode.includes('/')) return false;
-                        const existingShiftDef = getShiftDefinitionByCode(existingShiftCode);
-                        return existingShiftDef?.time === complementaryTime;
-                    });
-
-                    if (candidates.length > 0) {
-                        candidates.sort((a, b) => (longShiftCounts[a.id] || 0) - (longShiftCounts[b.id] || 0));
-                        const bestCandidate = candidates[0];
-                        
-                        const originalShiftCode = staffAssignments[bestCandidate.id][uncoveredShift.date];
-                        const newShiftCode = uncoveredShiftDef.time === ShiftTime.Afternoon
-                            ? `${originalShiftCode}/${uncoveredShift.shiftCode}`
-                            : `${uncoveredShift.shiftCode}/${originalShiftCode}`;
-                        
-                        staffAssignments[bestCandidate.id][uncoveredShift.date] = newShiftCode;
-                        
-                        coveredUncoveredShiftIds.add(uncoveredShift.id);
-                        longShiftCounts[bestCandidate.id]++;
-                        coveredCount++;
-                    }
-                });
-                if (coveredCount > 0) log.push(`👍 Coperti ${coveredCount} turni scoperti tramite turni lunghi.`);
-
-                const finalSchedule: ScheduledShift[] = [];
-                Object.entries(staffAssignments).forEach(([staffId, assignments]) => {
-                    Object.entries(assignments).forEach(([date, shiftCode]) => {
-                        finalSchedule.push({ id: `${staffId}-${date}`, staffId, date, shiftCode: shiftCode || null });
-                    });
-                });
-                generatedUncoveredShifts.forEach(s => {
-                    if (!coveredUncoveredShiftIds.has(s.id)) {
-                        finalSchedule.push(s);
-                    }
-                });
-
+                const finalScheduleWithUncovered = [...finalSchedule, ...finalUncoveredShifts];
+    
                 log.push(`✅ Generazione completata.`);
                 setGenerationLog(log);
-                onGenerateSchedule(finalSchedule, targetDate, [...staffList.map(s => s.id), UNASSIGNED_STAFF_ID]);
+                onGenerateSchedule(finalScheduleWithUncovered, targetDate, [...staffList.map(s => s.id), UNASSIGNED_STAFF_ID]);
             
             } catch (error) {
                 console.error("Errore durante la generazione dei turni:", error);
@@ -863,7 +820,7 @@ export const ShiftPlanner: React.FC<ShiftPlannerProps> = ({ staffList, activeTab
                 setIsConfirming(false);
             }
         }, 500);
-    }, [activeTab, targetDate, requirements, staffList, scheduledShifts, getShiftDefinitionByCode, onGenerateSchedule, shiftDefinitions, teams, dateOverrides, plannerAbsences, relevantShifts]);
+    }, [activeTab, targetDate, requirements, staffList, getShiftDefinitionByCode, onGenerateSchedule, shiftDefinitions, teams, dateOverrides, plannerAbsences, relevantShifts]);
 
 
     const selectedPresetIsDefault = useMemo(() => {

@@ -390,6 +390,7 @@ export const useShiftData = () => {
                     return false;
                 }
 
+                // Role check
                 switch (originalRole) {
                     case RoleEnum.Nurse:
                         if (s.role !== RoleEnum.Nurse && s.role !== RoleEnum.HeadNurse) return false;
@@ -411,10 +412,45 @@ export const useShiftData = () => {
                         return false;
                 }
 
+                // Availability check for the shift date
                 const staffShiftOnDate = scheduledShifts.find(shift => shift.staffId === s.id && shift.date === uncoveredShift.date);
-                const staffShiftDef = staffShiftOnDate?.shiftCode ? getShiftDefinitionByCode(staffShiftOnDate.shiftCode) : null;
-                if (staffShiftDef && (staffShiftDef.time === ShiftTime.Absence || staffShiftDef.time === ShiftTime.Rest)) {
-                    return false;
+                if (staffShiftOnDate?.shiftCode) {
+                    const staffShiftDef = getShiftDefinitionByCode(staffShiftOnDate.shiftCode);
+                    if (staffShiftDef) {
+                        // Cannot replace if on absence or post-night rest
+                        if (staffShiftDef.time === ShiftTime.Absence || staffShiftDef.code === 'S') {
+                            return false;
+                        }
+                    }
+                }
+                
+                // Night shift specific rules
+                if (uncoveredShiftDef.time === ShiftTime.Night) {
+                    const shiftDate = new Date(uncoveredShift.date + 'T12:00:00Z');
+
+                    // Check day AFTER: Cannot work morning after a night shift
+                    const nextDay = new Date(shiftDate);
+                    nextDay.setDate(shiftDate.getDate() + 1);
+                    const nextDayDateStr = nextDay.toISOString().split('T')[0];
+                    const shiftOnNextDay = scheduledShifts.find(shift => shift.staffId === s.id && shift.date === nextDayDateStr);
+                    if (shiftOnNextDay?.shiftCode) {
+                        const shiftDefOnNextDay = getShiftDefinitionByCode(shiftOnNextDay.shiftCode);
+                        if (shiftDefOnNextDay && shiftDefOnNextDay.time === ShiftTime.Morning) {
+                            return false;
+                        }
+                    }
+
+                    // Check day BEFORE: Cannot work two nights in a row
+                    const previousDay = new Date(shiftDate);
+                    previousDay.setDate(shiftDate.getDate() - 1);
+                    const previousDayDateStr = previousDay.toISOString().split('T')[0];
+                    const shiftOnPreviousDay = scheduledShifts.find(shift => shift.staffId === s.id && shift.date === previousDayDateStr);
+                    if (shiftOnPreviousDay?.shiftCode) {
+                        const shiftDefOnPreviousDay = getShiftDefinitionByCode(shiftOnPreviousDay.shiftCode);
+                        if (shiftDefOnPreviousDay && shiftDefOnPreviousDay.time === ShiftTime.Night) {
+                            return false;
+                        }
+                    }
                 }
 
                 return true;
@@ -424,22 +460,35 @@ export const useShiftData = () => {
                 const staffShiftDef = staffShiftOnDate?.shiftCode ? getShiftDefinitionByCode(staffShiftOnDate.shiftCode) : null;
 
                 let priority = 0;
-                let reason = "Libero/a da turni";
+                let reason = "Disponibile"; // Default reason that will be replaced
                 
                 const canDoLongShift = s.contract === ContractEnum.H12 || s.contract === ContractEnum.H24;
 
-                if (canDoLongShift && staffShiftDef && staffShiftDef.time === ShiftTime.Morning && uncoveredShiftDef.time === ShiftTime.Afternoon) {
-                    priority = 2;
-                    reason = "Può estendere il turno di mattina";
-                } else if (canDoLongShift && staffShiftDef && staffShiftDef.time === ShiftTime.Afternoon && uncoveredShiftDef.time === ShiftTime.Morning) {
-                    priority = 1;
-                    reason = "Può anticipare il turno di pomeriggio";
-                } else if (!staffShiftDef) {
-                    priority = 0;
-                } else {
-                    return null; 
+                // Logic for combining M/P shifts (day shifts)
+                if (uncoveredShiftDef.time !== ShiftTime.Night && canDoLongShift && staffShiftDef && staffShiftDef.time !== ShiftTime.Rest) {
+                    if (staffShiftDef.time === ShiftTime.Morning && uncoveredShiftDef.time === ShiftTime.Afternoon) {
+                        priority = 2;
+                        reason = "Può estendere il turno di mattina";
+                    } else if (staffShiftDef.time === ShiftTime.Afternoon && uncoveredShiftDef.time === ShiftTime.Morning) {
+                        priority = 1;
+                        reason = "Può anticipare il turno di pomeriggio";
+                    }
                 }
 
+                if (reason === "Disponibile") { // If no specific combination logic applied
+                    if (!staffShiftDef) {
+                        reason = "Libero/a da turni";
+                        priority = 1; // Good candidate
+                    } else if (staffShiftDef.time === ShiftTime.Rest) {
+                        // We already filtered out 'S', so this is 'R' or 'RS'
+                        reason = `In riposo (${staffShiftDef.code}), può coprire il turno`;
+                        priority = 0; // Less ideal than someone totally free, but available
+                    } else {
+                        // The person is working another, non-combinable shift.
+                        return null;
+                    }
+                }
+                
                 const staffAllowedLocations = getStaffAllowedLocations(s);
                 if (staffAllowedLocations.includes(uncoveredShiftDef.location)) {
                     reason += " (Esperto/a)";

@@ -2,6 +2,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import type { Staff, ShiftDefinition, Team } from '../types';
 import { StaffRole, ContractType, ShiftTime } from '../types';
+import { RoleAndSquadIcons } from './RoleAndSquadIcons';
 
 interface StaffEditModalProps {
     staff: Staff;
@@ -74,7 +75,10 @@ export const StaffEditModal: React.FC<StaffEditModalProps> = ({ staff, onSave, o
             <div className="bg-white rounded-lg shadow-2xl w-full max-w-4xl transform transition-all" onClick={(e) => e.stopPropagation()}>
                 <div className="p-4 flex items-center justify-between border-b">
                      <div>
-                        <h2 className="text-2xl font-bold text-gray-800">{staff.name}</h2>
+                        <div className="flex items-center space-x-2">
+                            <h2 className="text-2xl font-bold text-gray-800">{staff.name}</h2>
+                            <RoleAndSquadIcons staff={staff} />
+                        </div>
                         <p className="text-sm text-gray-500">{staff.role} - Contratto: <span className="font-semibold">{contractLabel[staff.contract]}</span></p>
                     </div>
                      <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
@@ -134,6 +138,25 @@ export const StaffEditModal: React.FC<StaffEditModalProps> = ({ staff, onSave, o
                                       rows={2} className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                                       placeholder="Es. 'Evitare doppi turni', '3 giorni HD a settimana'"></textarea>
                         </div>
+                        {formData.contract === ContractType.H24 && (
+                            <div>
+                                <label htmlFor={`night-squad-${staff.id}`} className="block text-sm font-medium text-gray-700 mb-1">Squadra Notte</label>
+                                <select
+                                    id={`night-squad-${staff.id}`}
+                                    value={formData.nightSquad || 0}
+                                    onChange={(e) => handleInputChange('nightSquad', e.target.value === '0' ? undefined : parseInt(e.target.value, 10))}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                >
+                                    <option value="0">Nessuna</option>
+                                    <option value="1">Squadra 1</option>
+                                    <option value="2">Squadra 2</option>
+                                    <option value="3">Squadra 3</option>
+                                    <option value="4">Squadra 4</option>
+                                    <option value="5">Squadra 5</option>
+                                </select>
+                                <p className="text-xs text-gray-500 mt-1">Assegna una squadra per la rotazione automatica delle notti.</p>
+                            </div>
+                        )}
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Team di Appartenenza</label>
                             <div className="max-h-40 overflow-y-auto space-y-2 p-3 bg-white rounded-md border">

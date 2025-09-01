@@ -1,43 +1,77 @@
 
 import type { Staff } from '../types';
-import { mockStaff, mockTeams } from '../constants';
-import type { StaffRole, ContractType } from '../types';
+import { mockStaff } from '../constants';
+import { supabase } from './supabaseClient';
 
 /**
- * Authenticates a user by checking credentials against the local mock data.
- * @param staffId The ID of the staff member trying to log in.
- * @param password The password provided by the user.
- * @returns A Promise that resolves with the Staff object (without password) on success, or rejects with an Error on failure.
+ * Autenticazione ibrida:
+ * - Se Supabase client non configurato o variabili mancanti -> usa solo mock locale.
+ * - Se configurato prova supabase.auth.signInWithPassword usando email (se presente) altrimenti fallback subito.
+ * Evita logout immediato se la sessione non persiste: niente dipendenza da eventi auth, manteniamo solo stato locale.
  */
-export const mockAuthenticateUser = (staffId: string, password: string): Promise<Staff> => {
-    return new Promise((resolve, reject) => {
-        // Find user from mock data
-        const staffData = mockStaff.find(s => s.id === staffId);
+export const authenticateUser = async (staffId: string, password: string): Promise<Staff> => {
+  const staffData = mockStaff.find(s => s.id === staffId);
 
-        if (!staffData) {
-            return reject(new Error('Utente non trovato o errore di connessione.'));
-        }
+  // Validazione base
+  if (!staffData) {
+    throw new Error('Utente non trovato.');
+  }
 
-        // Verify the password.
-        if (staffData.password === password) {
-            // Construct and resolve the user object.
-            const user: Staff = {
-                id: staffData.id,
-                name: staffData.name,
-                role: staffData.role as StaffRole,
-                contract: staffData.contract as ContractType,
-                teamIds: staffData.teamIds,
-                phone: staffData.phone,
-                email: staffData.email,
-                hasLaw104: staffData.hasLaw104,
-                specialRules: staffData.specialRules,
-                unavailableShiftCodes: staffData.unavailableShiftCodes,
-                nightSquad: staffData.nightSquad,
-            };
-            // The user object for the session does not need the password.
-            resolve(user);
-        } else {
-            reject(new Error('Credenziali non valide. Riprova.'));
-        }
+  // Se client Supabase non disponibile => solo mock
+  if (!supabase) {
+    if (staffData.password === password) {
+      const { password: _pw, ...user } = staffData;
+      return user as Staff;
+    }
+    throw new Error('Credenziali non valide.');
+  }
+
+  // Se manca email nel profilo mock, non tentare auth remota
+  if (!staffData.email) {
+    if (staffData.password === password) {
+      const { password: _pw, ...user } = staffData;
+      return user as Staff;
+    }
+    throw new Error('Credenziali non valide.');
+  }
+
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: staffData.email,
+      password
     });
+
+    if (!error && data?.user) {
+      // Recupera profilo staff dal DB (può essere opzionale: se non trovato usa mock)
+      const { data: staffProfile, error: profileError } = await supabase
+        .from('staff')
+        .select('*')
+        .eq('email', staffData.email)
+        .single();
+
+      if (!profileError && staffProfile) {
+        // Rimuovi eventuale password
+        const { password: _pw, ...user } = staffProfile;
+        return user as Staff;
+      }
+      // Se profilo non trovato ma login ok, fallback a mock
+      const { password: _pw, ...user } = staffData;
+      return user as Staff;
+    }
+
+    // Fallita auth remota -> fallback mock
+    if (staffData.password === password) {
+      const { password: _pw, ...user } = staffData;
+      return user as Staff;
+    }
+
+    throw new Error('Credenziali non valide.');
+  } catch (e) {
+    // Qualsiasi eccezione -> fallback mock
+    if (staffData.password === password) {
+      const { password: _pw, ...user } = staffData;
+      return user as Staff;
+    }
+    throw new Error('Errore autenticazione.');
+  }
 };

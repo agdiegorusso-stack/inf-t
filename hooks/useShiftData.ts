@@ -1,6 +1,7 @@
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { UNASSIGNED_STAFF_ID, mockStaff, mockTeams, mockShiftDefinitions } from '../constants';
+import { supabase } from '../services/supabaseClient';
 import type { Staff, ScheduledShift, Absence, ShiftDefinition, ReplacementOption, Team, Location } from '../types';
 import { ShiftTime, StaffRole as RoleEnum, StaffRole } from '../types';
 import { isShiftAllowed } from '../utils/shiftUtils';
@@ -17,14 +18,46 @@ export const useShiftData = () => {
     const [shiftDefinitions, setShiftDefinitions] = useState<ShiftDefinition[]>([]);
 
     useEffect(() => {
-        // Simulate loading data from constants
-        setStaff(JSON.parse(JSON.stringify(mockStaff)));
-        setTeams(JSON.parse(JSON.stringify(mockTeams)));
-        setShiftDefinitions(JSON.parse(JSON.stringify(mockShiftDefinitions)));
-        setScheduledShifts([]); 
-        setAbsences([]);
-        // Use a timeout to ensure the loading spinner shows briefly, preventing UI flicker.
-        setTimeout(() => setIsLoading(false), 50); 
+        const fetchData = async () => {
+            setIsLoading(true);
+            let staffData, staffError, teamsData, teamsError, shiftDefData, shiftDefError;
+
+            if (supabase) {
+                try {
+                    ({ data: staffData, error: staffError } = await supabase.from('staff').select('*'));
+                    ({ data: teamsData, error: teamsError } = await supabase.from('teams').select('*'));
+                    ({ data: shiftDefData, error: shiftDefError } = await supabase.from('shift_definitions').select('*'));
+                } catch (e) {
+                    console.warn('Errore fetch Supabase, fallback ai mock', e);
+                }
+            }
+
+            const hasRemote =
+                !staffError && Array.isArray(staffData) && staffData.length > 0 &&
+                !teamsError && Array.isArray(teamsData) && teamsData.length > 0 &&
+                !shiftDefError && Array.isArray(shiftDefData) && shiftDefData.length > 0;
+
+            if (hasRemote) {
+                setStaff(staffData!);
+                setTeams(teamsData!);
+                setShiftDefinitions(shiftDefData!);
+            } else {
+                console.warn('Uso mock (supabase non configurato o dataset vuoto)', {
+                    supabasePresent: !!supabase,
+                    staffError, teamsError, shiftDefError,
+                    staffCount: staffData?.length ?? null,
+                    teamsCount: teamsData?.length ?? null,
+                    shiftDefCount: shiftDefData?.length ?? null
+                });
+                setStaff(JSON.parse(JSON.stringify(mockStaff)));
+                setTeams(JSON.parse(JSON.stringify(mockTeams)));
+                setShiftDefinitions(JSON.parse(JSON.stringify(mockShiftDefinitions)));
+            }
+            setScheduledShifts([]); 
+            setAbsences([]);
+            setTimeout(() => setIsLoading(false), 50); 
+        };
+        fetchData();
     }, []);
 
 
@@ -49,11 +82,23 @@ export const useShiftData = () => {
     }, [getTeamById]);
     
     const addTeam = useCallback(async (newTeam: Team) => {
-        setTeams(prev => [...prev, newTeam]);
+        const { error } = await supabase.from('teams').insert([newTeam]);
+        if (!error) {
+            const { data: teamsData } = await supabase.from('teams').select('*');
+            setTeams(teamsData || []);
+        } else {
+            setTeams(prev => [...prev, newTeam]);
+        }
     }, []);
 
     const updateTeam = useCallback(async (teamId: string, updates: Partial<Omit<Team, 'id'>>) => {
-        setTeams(prev => prev.map(t => t.id === teamId ? { ...t, ...updates } : t));
+        const { error } = await supabase.from('teams').update(updates).eq('id', teamId);
+        if (!error) {
+            const { data: teamsData } = await supabase.from('teams').select('*');
+            setTeams(teamsData || []);
+        } else {
+            setTeams(prev => prev.map(t => t.id === teamId ? { ...t, ...updates } : t));
+        }
     }, []);
 
     const deleteTeam = useCallback(async (teamId: string) => {
@@ -65,7 +110,13 @@ export const useShiftData = () => {
     }, []);
 
     const addShiftDefinition = useCallback(async (newShift: ShiftDefinition) => {
-        setShiftDefinitions(prev => [...prev, newShift]);
+        const { error } = await supabase.from('shift_definitions').insert([newShift]);
+        if (!error) {
+            const { data: shiftDefData } = await supabase.from('shift_definitions').select('*');
+            setShiftDefinitions(shiftDefData || []);
+        } else {
+            setShiftDefinitions(prev => [...prev, newShift]);
+        }
     }, []);
 
     const deleteShiftDefinition = useCallback(async (code: string) => {
@@ -73,11 +124,23 @@ export const useShiftData = () => {
             alert("Impossibile eliminare il turno perché è attualmente assegnato nel calendario. Rimuovere tutte le assegnazioni prima di procedere.");
             return;
         }
-        setShiftDefinitions(prev => prev.filter(s => s.code !== code));
+        const { error } = await supabase.from('shift_definitions').delete().eq('code', code);
+        if (!error) {
+            const { data: shiftDefData } = await supabase.from('shift_definitions').select('*');
+            setShiftDefinitions(shiftDefData || []);
+        } else {
+            setShiftDefinitions(prev => prev.filter(s => s.code !== code));
+        }
     }, [scheduledShifts]);
 
     const updateShiftDefinition = useCallback(async (originalCode: string, updatedShift: ShiftDefinition) => {
-        setShiftDefinitions(prev => prev.map(s => s.code === originalCode ? updatedShift : s));
+        const { error } = await supabase.from('shift_definitions').update(updatedShift).eq('code', originalCode);
+        if (!error) {
+            const { data: shiftDefData } = await supabase.from('shift_definitions').select('*');
+            setShiftDefinitions(shiftDefData || []);
+        } else {
+            setShiftDefinitions(prev => prev.map(s => s.code === originalCode ? updatedShift : s));
+        }
         // Also update any scheduled shifts that use the old code
         if (originalCode !== updatedShift.code) {
              setScheduledShifts(prevShifts => prevShifts.map(ss => {
@@ -89,7 +152,7 @@ export const useShiftData = () => {
         }
     }, []);
     
-    const addAbsence = useCallback((staffId: string, reason: string, startDate: Date, endDate: Date) => {
+    const addAbsence = useCallback(async (staffId: string, reason: string, startDate: Date, endDate: Date) => {
         const newAbsence: Absence = {
             id: `abs-${staffId}-${Date.now()}`,
             staffId,
@@ -97,7 +160,13 @@ export const useShiftData = () => {
             startDate: formatDate(startDate),
             endDate: formatDate(endDate),
         };
-        setAbsences(prev => [...prev, newAbsence]);
+        const { error } = await supabase.from('absences').insert([newAbsence]);
+        if (!error) {
+            const { data: absData } = await supabase.from('absences').select('*');
+            setAbsences(absData || []);
+        } else {
+            setAbsences(prev => [...prev, newAbsence]);
+        }
 
         let newShifts: ScheduledShift[] = [];
         let uncoveredShifts: ScheduledShift[] = [];
@@ -128,17 +197,23 @@ export const useShiftData = () => {
             });
         }
 
-        setScheduledShifts(prev => {
-            // Filter out old shifts for the user in the date range
-            const otherShifts = prev.filter(s => {
-                if (s.staffId !== staffId) return true;
-                const shiftDate = new Date(s.date);
-                return shiftDate < startDate || shiftDate > endDate;
+        // Save new shifts to Supabase
+        if (newShifts.length > 0 || uncoveredShifts.length > 0) {
+            await supabase.from('scheduled_shifts').insert([...newShifts, ...uncoveredShifts]);
+            const { data: shiftsData } = await supabase.from('scheduled_shifts').select('*');
+            setScheduledShifts(shiftsData || []);
+        } else {
+            setScheduledShifts(prev => {
+                // Filter out old shifts for the user in the date range
+                const otherShifts = prev.filter(s => {
+                    if (s.staffId !== staffId) return true;
+                    const shiftDate = new Date(s.date);
+                    return shiftDate < startDate || shiftDate > endDate;
+                });
+                // Add the new absence shifts and any new uncovered shifts
+                return [...otherShifts, ...newShifts, ...uncoveredShifts];
             });
-            // Add the new absence shifts and any new uncovered shifts
-            return [...otherShifts, ...newShifts, ...uncoveredShifts];
-        });
-
+        }
     }, [scheduledShifts, getShiftDefinitionByCode]);
 
     const findReplacements = useCallback((uncoveredShift: ScheduledShift): ReplacementOption[] => {
@@ -236,8 +311,13 @@ export const useShiftData = () => {
     }, []);
 
     const updateStaffMember = useCallback(async (staffId: string, updates: Partial<Omit<Staff, 'id' | 'name'>>) => {
-        setStaff(prev => prev.map(s => s.id === staffId ? { ...s, ...updates } : s));
-        
+        const { error } = await supabase.from('staff').update(updates).eq('id', staffId);
+        if (!error) {
+            const { data: staffData } = await supabase.from('staff').select('*');
+            setStaff(staffData || []);
+        } else {
+            setStaff(prev => prev.map(s => s.id === staffId ? { ...s, ...updates } : s));
+        }
         // This is needed because the mockStaff in constants.ts is also used by authService
         const staffMember = mockStaff.find(s => s.id === staffId);
         if (staffMember) {

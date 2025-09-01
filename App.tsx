@@ -10,7 +10,7 @@ import { useShiftData } from './hooks/useShiftData';
 import type { ScheduledShift, Staff, Team } from './types';
 import { ContractType, StaffRole } from './types';
 import { LoginScreen } from './components/LoginScreen';
-import { mockAuthenticateUser } from './services/authService';
+import { authenticateUser } from './services/authService';
 import { ShiftPlanner } from './components/ShiftPlanner';
 import { PersonnelPage } from './components/PersonnelPage';
 import { StaffEditModal } from './components/StaffEditModal';
@@ -58,7 +58,7 @@ const App: React.FC = () => {
         setIsAuthLoading(true);
         setLoginError(null);
         try {
-            const user = await mockAuthenticateUser(staffId, password);
+            const user = await authenticateUser(staffId, password);
             setCurrentUser(user);
         } catch (error) {
             if (error instanceof Error) {

@@ -13,5 +13,12 @@ const supabaseAnonKey =
 
 // Crea client solo se variabili disponibili
 export const supabase = (supabaseUrl && supabaseAnonKey)
-  ? createClient(supabaseUrl, supabaseAnonKey)
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        // Mantiene la sessione tra refresh di pagina
+        persistSession: true,
+        // Rinnova automaticamente il JWT prima della scadenza
+        autoRefreshToken: true,
+      },
+    })
   : null;

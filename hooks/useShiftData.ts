@@ -1,25 +1,65 @@
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { UNASSIGNED_STAFF_ID, mockStaff, mockTeams, mockShiftDefinitions } from '../constants';
 import { supabase } from '../services/supabaseClient';
 import type { Staff, ScheduledShift, Absence, ShiftDefinition, ReplacementOption, Team, Location } from '../types';
 import { ShiftTime, StaffRole as RoleEnum, StaffRole } from '../types';
 import { isShiftAllowed } from '../utils/shiftUtils';
 
-// Helper to format date to YYYY-MM-DD
+ // Helper to format date to YYYY-MM-DD
 const formatDate = (date: Date): string => date.toISOString().split('T')[0];
+
+const STORAGE_KEY = 'shiftDataCacheV1';
+interface CachedData {
+    staff: Staff[];
+    teams: Team[];
+    shiftDefinitions: ShiftDefinition[];
+    scheduledShifts: ScheduledShift[];
+    absences: Absence[];
+}
 
 export const useShiftData = () => {
     const [isLoading, setIsLoading] = useState(true);
-    const [staff, setStaff] = useState<Staff[]>([]);
-    const [teams, setTeams] = useState<Team[]>([]);
+    const [staff, setStaff] = useState<Staff[]>(() => {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed?.staff?.length) return parsed.staff as Staff[];
+            }
+        } catch {}
+        return JSON.parse(JSON.stringify(mockStaff));
+    });
+    const [teams, setTeams] = useState<Team[]>(() => {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed?.teams?.length) return parsed.teams as Team[];
+            }
+        } catch {}
+        return JSON.parse(JSON.stringify(mockTeams));
+    });
     const [scheduledShifts, setScheduledShifts] = useState<ScheduledShift[]>([]);
     const [absences, setAbsences] = useState<Absence[]>([]);
-    const [shiftDefinitions, setShiftDefinitions] = useState<ShiftDefinition[]>([]);
+    const [shiftDefinitions, setShiftDefinitions] = useState<ShiftDefinition[]>(() => {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed?.shiftDefinitions?.length) return parsed.shiftDefinitions as ShiftDefinition[];
+            }
+        } catch {}
+        return JSON.parse(JSON.stringify(mockShiftDefinitions));
+    });
+    const [isRemote, setIsRemote] = useState(false);
+    const hasLoadedRef = useRef(false);
 
     useEffect(() => {
         const fetchData = async () => {
-            setIsLoading(true);
+            if (!hasLoadedRef.current) {
+                setIsLoading(true);
+            }
             let staffData, staffError, teamsData, teamsError, shiftDefData, shiftDefError;
 
             if (supabase) {
@@ -28,37 +68,97 @@ export const useShiftData = () => {
                     ({ data: teamsData, error: teamsError } = await supabase.from('teams').select('*'));
                     ({ data: shiftDefData, error: shiftDefError } = await supabase.from('shift_definitions').select('*'));
                 } catch (e) {
-                    console.warn('Errore fetch Supabase, fallback ai mock', e);
+                    console.warn('Errore fetch Supabase, fallback ai cache/mock', e);
                 }
             }
 
             const hasRemote =
-                !staffError && Array.isArray(staffData) && staffData.length > 0 &&
-                !teamsError && Array.isArray(teamsData) && teamsData.length > 0 &&
-                !shiftDefError && Array.isArray(shiftDefData) && shiftDefData.length > 0;
+                supabase &&
+                !staffError &&
+                !teamsError &&
+                !shiftDefError &&
+                Array.isArray(staffData) &&
+                Array.isArray(teamsData) &&
+                Array.isArray(shiftDefData);
 
             if (hasRemote) {
+                setIsRemote(true);
                 setStaff(staffData!);
                 setTeams(teamsData!);
                 setShiftDefinitions(shiftDefData!);
+                try {
+                    const { data: schedData, error: schedError } = await supabase.from('scheduled_shifts').select('*');
+                    if (!schedError) {
+                        setScheduledShifts(schedData || []);
+                    }
+                    const { data: absData, error: absErr } = await supabase.from('absences').select('*');
+                    if (!absErr) {
+                        setAbsences(absData || []);
+                    }
+                } catch (e) {
+                    console.warn('Errore caricamento scheduled_shifts/absences, proseguo senza', e);
+                }
             } else {
-                console.warn('Uso mock (supabase non configurato o dataset vuoto)', {
-                    supabasePresent: !!supabase,
-                    staffError, teamsError, shiftDefError,
-                    staffCount: staffData?.length ?? null,
-                    teamsCount: teamsData?.length ?? null,
-                    shiftDefCount: shiftDefData?.length ?? null
-                });
-                setStaff(JSON.parse(JSON.stringify(mockStaff)));
-                setTeams(JSON.parse(JSON.stringify(mockTeams)));
-                setShiftDefinitions(JSON.parse(JSON.stringify(mockShiftDefinitions)));
+                setIsRemote(false);
+                // Prova prima a prendere da localStorage
+                let loaded = false;
+                try {
+                    const raw = localStorage.getItem(STORAGE_KEY);
+                    if (raw) {
+                        const parsed: Partial<CachedData> = JSON.parse(raw);
+                        if (parsed && parsed.staff && parsed.teams && parsed.shiftDefinitions) {
+                            setStaff(parsed.staff as Staff[]);
+                            setTeams(parsed.teams as Team[]);
+                            setShiftDefinitions(parsed.shiftDefinitions as ShiftDefinition[]);
+                            setScheduledShifts(parsed.scheduledShifts || []);
+                            setAbsences(parsed.absences || []);
+                            loaded = true;
+                            console.info('Dati caricati da cache locale');
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Errore parsing cache locale', e);
+                }
+
+                if (!loaded) {
+                    console.warn('Uso mock (supabase non configurato/dataset vuoto e nessuna cache)', {
+                        supabasePresent: !!supabase,
+                        staffError, teamsError, shiftDefError,
+                        staffCount: staffData?.length ?? null,
+                        teamsCount: teamsData?.length ?? null,
+                        shiftDefCount: shiftDefData?.length ?? null
+                    });
+                    setStaff(JSON.parse(JSON.stringify(mockStaff)));
+                    setTeams(JSON.parse(JSON.stringify(mockTeams)));
+                    setShiftDefinitions(JSON.parse(JSON.stringify(mockShiftDefinitions)));
+                    setScheduledShifts([]);
+                    setAbsences([]);
+                }
             }
-            setScheduledShifts([]); 
-            setAbsences([]);
-            setTimeout(() => setIsLoading(false), 50); 
+
+            hasLoadedRef.current = true;
+            setIsLoading(false);
         };
         fetchData();
     }, []);
+
+    // Persistenza locale quando in modalità senza backend
+    useEffect(() => {
+        if (!isRemote && !isLoading) {
+            try {
+                const payload: CachedData = {
+                    staff,
+                    teams,
+                    shiftDefinitions,
+                    scheduledShifts,
+                    absences
+                };
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+            } catch (e) {
+                console.warn('Impossibile salvare cache locale', e);
+            }
+        }
+    }, [isRemote, isLoading, staff, teams, shiftDefinitions, scheduledShifts, absences]);
 
 
     const shiftDefMap = useMemo(() => new Map(shiftDefinitions.map(def => [def.code, def])), [shiftDefinitions]);
@@ -82,24 +182,44 @@ export const useShiftData = () => {
     }, [getTeamById]);
     
     const addTeam = useCallback(async (newTeam: Team) => {
-        const { error } = await supabase.from('teams').insert([newTeam]);
-        if (!error) {
-            const { data: teamsData } = await supabase.from('teams').select('*');
-            setTeams(teamsData || []);
-        } else {
+        if (!supabase || !isRemote) {
+            setTeams(prev => [...prev, newTeam]);
+            return;
+        }
+        try {
+            const { error } = await supabase.from('teams').insert([newTeam]);
+            if (!error) {
+                const { data: teamsData } = await supabase.from('teams').select('*');
+                setTeams(teamsData || []);
+            } else {
+                console.warn('Errore insert team, fallback locale', error);
+                setTeams(prev => [...prev, newTeam]);
+            }
+        } catch (e) {
+            console.warn('Eccezione insert team, fallback locale', e);
             setTeams(prev => [...prev, newTeam]);
         }
-    }, []);
+    }, [isRemote]);
 
     const updateTeam = useCallback(async (teamId: string, updates: Partial<Omit<Team, 'id'>>) => {
-        const { error } = await supabase.from('teams').update(updates).eq('id', teamId);
-        if (!error) {
-            const { data: teamsData } = await supabase.from('teams').select('*');
-            setTeams(teamsData || []);
-        } else {
+        if (!supabase || !isRemote) {
+            setTeams(prev => prev.map(t => t.id === teamId ? { ...t, ...updates } : t));
+            return;
+        }
+        try {
+            const { error } = await supabase.from('teams').update(updates).eq('id', teamId);
+            if (!error) {
+                const { data: teamsData } = await supabase.from('teams').select('*');
+                setTeams(teamsData || []);
+            } else {
+                console.warn('Errore update team, fallback locale', error);
+                setTeams(prev => prev.map(t => t.id === teamId ? { ...t, ...updates } : t));
+            }
+        } catch (e) {
+            console.warn('Eccezione update team, fallback locale', e);
             setTeams(prev => prev.map(t => t.id === teamId ? { ...t, ...updates } : t));
         }
-    }, []);
+    }, [isRemote]);
 
     const deleteTeam = useCallback(async (teamId: string) => {
         setTeams(prev => prev.filter(t => t.id !== teamId));
@@ -110,47 +230,76 @@ export const useShiftData = () => {
     }, []);
 
     const addShiftDefinition = useCallback(async (newShift: ShiftDefinition) => {
-        const { error } = await supabase.from('shift_definitions').insert([newShift]);
-        if (!error) {
-            const { data: shiftDefData } = await supabase.from('shift_definitions').select('*');
-            setShiftDefinitions(shiftDefData || []);
-        } else {
+        if (!supabase || !isRemote) {
+            setShiftDefinitions(prev => [...prev, newShift]);
+            return;
+        }
+        try {
+            const { error } = await supabase.from('shift_definitions').insert([newShift]);
+            if (!error) {
+                const { data: shiftDefData } = await supabase.from('shift_definitions').select('*');
+                setShiftDefinitions(shiftDefData || []);
+            } else {
+                console.warn('Errore insert shift_def, fallback locale', error);
+                setShiftDefinitions(prev => [...prev, newShift]);
+            }
+        } catch (e) {
+            console.warn('Eccezione insert shift_def, fallback locale', e);
             setShiftDefinitions(prev => [...prev, newShift]);
         }
-    }, []);
+    }, [isRemote]);
 
     const deleteShiftDefinition = useCallback(async (code: string) => {
         if (scheduledShifts.some(s => s.shiftCode?.split('/').includes(code))) {
             alert("Impossibile eliminare il turno perché è attualmente assegnato nel calendario. Rimuovere tutte le assegnazioni prima di procedere.");
             return;
         }
-        const { error } = await supabase.from('shift_definitions').delete().eq('code', code);
-        if (!error) {
-            const { data: shiftDefData } = await supabase.from('shift_definitions').select('*');
-            setShiftDefinitions(shiftDefData || []);
-        } else {
+        if (!supabase || !isRemote) {
+            setShiftDefinitions(prev => prev.filter(s => s.code !== code));
+            return;
+        }
+        try {
+            const { error } = await supabase.from('shift_definitions').delete().eq('code', code);
+            if (!error) {
+                const { data: shiftDefData } = await supabase.from('shift_definitions').select('*');
+                setShiftDefinitions(shiftDefData || []);
+            } else {
+                console.warn('Errore delete shift_def, fallback locale', error);
+                setShiftDefinitions(prev => prev.filter(s => s.code !== code));
+            }
+        } catch (e) {
+            console.warn('Eccezione delete shift_def, fallback locale', e);
             setShiftDefinitions(prev => prev.filter(s => s.code !== code));
         }
-    }, [scheduledShifts]);
+    }, [scheduledShifts, isRemote]);
 
     const updateShiftDefinition = useCallback(async (originalCode: string, updatedShift: ShiftDefinition) => {
-        const { error } = await supabase.from('shift_definitions').update(updatedShift).eq('code', originalCode);
-        if (!error) {
-            const { data: shiftDefData } = await supabase.from('shift_definitions').select('*');
-            setShiftDefinitions(shiftDefData || []);
-        } else {
+        if (!supabase || !isRemote) {
             setShiftDefinitions(prev => prev.map(s => s.code === originalCode ? updatedShift : s));
+        } else {
+            try {
+                const { error } = await supabase.from('shift_definitions').update(updatedShift).eq('code', originalCode);
+                if (!error) {
+                    const { data: shiftDefData } = await supabase.from('shift_definitions').select('*');
+                    setShiftDefinitions(shiftDefData || []);
+                } else {
+                    console.warn('Errore update shift_def, fallback locale', error);
+                    setShiftDefinitions(prev => prev.map(s => s.code === originalCode ? updatedShift : s));
+                }
+            } catch (e) {
+                console.warn('Eccezione update shift_def, fallback locale', e);
+                setShiftDefinitions(prev => prev.map(s => s.code === originalCode ? updatedShift : s));
+            }
         }
-        // Also update any scheduled shifts that use the old code
         if (originalCode !== updatedShift.code) {
-             setScheduledShifts(prevShifts => prevShifts.map(ss => {
+            setScheduledShifts(prevShifts => prevShifts.map(ss => {
                 if (ss.shiftCode === originalCode) {
                     return { ...ss, shiftCode: updatedShift.code };
                 }
                 return ss;
             }));
         }
-    }, []);
+    }, [isRemote]);
     
     const addAbsence = useCallback(async (staffId: string, reason: string, startDate: Date, endDate: Date) => {
         const newAbsence: Absence = {
@@ -160,12 +309,22 @@ export const useShiftData = () => {
             startDate: formatDate(startDate),
             endDate: formatDate(endDate),
         };
-        const { error } = await supabase.from('absences').insert([newAbsence]);
-        if (!error) {
-            const { data: absData } = await supabase.from('absences').select('*');
-            setAbsences(absData || []);
-        } else {
+        if (!supabase || !isRemote) {
             setAbsences(prev => [...prev, newAbsence]);
+        } else {
+            try {
+                const { error } = await supabase.from('absences').insert([newAbsence]);
+                if (!error) {
+                    const { data: absData } = await supabase.from('absences').select('*');
+                    setAbsences(absData || []);
+                } else {
+                    console.warn('Errore insert absence, fallback locale', error);
+                    setAbsences(prev => [...prev, newAbsence]);
+                }
+            } catch (e) {
+                console.warn('Eccezione insert absence, fallback locale', e);
+                setAbsences(prev => [...prev, newAbsence]);
+            }
         }
 
         let newShifts: ScheduledShift[] = [];
@@ -197,24 +356,40 @@ export const useShiftData = () => {
             });
         }
 
-        // Save new shifts to Supabase
-        if (newShifts.length > 0 || uncoveredShifts.length > 0) {
-            await supabase.from('scheduled_shifts').insert([...newShifts, ...uncoveredShifts]);
-            const { data: shiftsData } = await supabase.from('scheduled_shifts').select('*');
-            setScheduledShifts(shiftsData || []);
+        if (supabase && isRemote) {
+            try {
+                if (newShifts.length > 0 || uncoveredShifts.length > 0) {
+                    await supabase.from('scheduled_shifts').upsert([...newShifts, ...uncoveredShifts], { onConflict: 'id' });
+                }
+                // refresh both shifts & absences
+                const [{ data: shiftsData }, { data: absData }] = await Promise.all([
+                    supabase.from('scheduled_shifts').select('*'),
+                    supabase.from('absences').select('*')
+                ]);
+                setScheduledShifts(shiftsData || []);
+                setAbsences(absData || []);
+            } catch (e) {
+                console.warn('Persistenza remote assenze fallita, aggiorno solo locale', e);
+                setScheduledShifts(prev => {
+                    const otherShifts = prev.filter(s => {
+                        if (s.staffId !== staffId) return true;
+                        const shiftDate = new Date(s.date);
+                        return shiftDate < startDate || shiftDate > endDate;
+                    });
+                    return [...otherShifts, ...newShifts, ...uncoveredShifts];
+                });
+            }
         } else {
             setScheduledShifts(prev => {
-                // Filter out old shifts for the user in the date range
                 const otherShifts = prev.filter(s => {
                     if (s.staffId !== staffId) return true;
                     const shiftDate = new Date(s.date);
                     return shiftDate < startDate || shiftDate > endDate;
                 });
-                // Add the new absence shifts and any new uncovered shifts
                 return [...otherShifts, ...newShifts, ...uncoveredShifts];
             });
         }
-    }, [scheduledShifts, getShiftDefinitionByCode]);
+    }, [scheduledShifts, getShiftDefinitionByCode, isRemote]);
 
     const findReplacements = useCallback((uncoveredShift: ScheduledShift): ReplacementOption[] => {
         const uncoveredShiftDef = getShiftDefinitionByCode(uncoveredShift.shiftCode!);
@@ -247,28 +422,32 @@ export const useShiftData = () => {
     const assignShift = useCallback(async (shiftId: string, newStaffId: string) => {
         const unassignedShift = scheduledShifts.find(s => s.id === shiftId);
         if (!unassignedShift) return;
+        const newShift: ScheduledShift = {
+            id: `${newStaffId}-${unassignedShift.date}`,
+            staffId: newStaffId,
+            date: unassignedShift.date,
+            shiftCode: unassignedShift.shiftCode,
+        };
 
         setScheduledShifts(prev => {
-            // Remove the unassigned shift
             const filtered = prev.filter(s => s.id !== shiftId);
-            
-            // Upsert the new shift for the staff member
             const existingShiftIndex = filtered.findIndex(s => s.staffId === newStaffId && s.date === unassignedShift.date);
-            const newShift: ScheduledShift = {
-                id: `${newStaffId}-${unassignedShift.date}`,
-                staffId: newStaffId,
-                date: unassignedShift.date,
-                shiftCode: unassignedShift.shiftCode,
-            };
-
             if (existingShiftIndex > -1) {
                 filtered[existingShiftIndex] = newShift;
                 return filtered;
-            } else {
-                return [...filtered, newShift];
             }
+            return [...filtered, newShift];
         });
-    }, [scheduledShifts]);
+
+        if (supabase && isRemote) {
+            try {
+                await supabase.from('scheduled_shifts').delete().eq('id', shiftId);
+                await supabase.from('scheduled_shifts').upsert([newShift], { onConflict: 'id' });
+            } catch (e) {
+                console.warn('Errore persistenza assignShift remoto', e);
+            }
+        }
+    }, [scheduledShifts, isRemote]);
 
     const updateShift = useCallback(async (staffId: string, date: string, newShiftCode: string | null) => {
         const id = `${staffId}-${date}`;
@@ -280,19 +459,46 @@ export const useShiftData = () => {
             }
             return otherShifts;
         });
-    }, []);
+        if (supabase && isRemote) {
+            try {
+                if (newShiftCode) {
+                    await supabase.from('scheduled_shifts').upsert([{ id, staffId, date, shiftCode: newShiftCode }], { onConflict: 'id' });
+                } else {
+                    await supabase.from('scheduled_shifts').delete().eq('id', id);
+                }
+            } catch (e) {
+                console.warn('Errore persistenza updateShift remoto', e);
+            }
+        }
+    }, [isRemote]);
 
     const overwriteSchedule = useCallback(async (newShifts: ScheduledShift[], targetMonth: string, affectedStaffIds: string[]) => {
         setScheduledShifts(prev => {
             const otherShifts = prev.filter(s => {
                 const isInMonth = s.date.startsWith(targetMonth);
                 const isAffected = affectedStaffIds.includes(s.staffId);
-                // Keep shifts that are NOT in the affected month for the affected staff
                 return !(isInMonth && isAffected);
             });
             return [...otherShifts, ...newShifts];
         });
-    }, []);
+
+        if (supabase && isRemote) {
+            try {
+                if (affectedStaffIds.length > 0) {
+                    await supabase
+                        .from('scheduled_shifts')
+                        .delete()
+                        .in('staffId', affectedStaffIds)
+                        .like('date', `${targetMonth}%`);
+                }
+                if (newShifts.length > 0) {
+                    await supabase.from('scheduled_shifts').upsert(newShifts, { onConflict: 'id' });
+                }
+            } catch (e) {
+                console.warn('Errore persistenza overwriteSchedule remoto', e);
+            }
+        }
+    }, [isRemote]);
 
     const importSchedule = useCallback(async (newShifts: ScheduledShift[]) => {
         if (newShifts.length === 0) return;
@@ -308,22 +514,46 @@ export const useShiftData = () => {
             });
             return [...otherShifts, ...newShifts];
         });
-    }, []);
+
+        if (supabase && isRemote) {
+            try {
+                for (const m of affectedMonths) {
+                    await supabase
+                        .from('scheduled_shifts')
+                        .delete()
+                        .in('staffId', affectedStaffIds)
+                        .like('date', `${m}%`);
+                }
+                await supabase.from('scheduled_shifts').upsert(newShifts, { onConflict: 'id' });
+            } catch (e) {
+                console.warn('Errore persistenza importSchedule remoto', e);
+            }
+        }
+    }, [isRemote]);
 
     const updateStaffMember = useCallback(async (staffId: string, updates: Partial<Omit<Staff, 'id' | 'name'>>) => {
-        const { error } = await supabase.from('staff').update(updates).eq('id', staffId);
-        if (!error) {
-            const { data: staffData } = await supabase.from('staff').select('*');
-            setStaff(staffData || []);
-        } else {
+        if (!supabase || !isRemote) {
             setStaff(prev => prev.map(s => s.id === staffId ? { ...s, ...updates } : s));
+        } else {
+            try {
+                const { error } = await supabase.from('staff').update(updates).eq('id', staffId);
+                if (!error) {
+                    const { data: staffData } = await supabase.from('staff').select('*');
+                    setStaff(staffData || []);
+                } else {
+                    console.warn('Errore update staff, fallback locale', error);
+                    setStaff(prev => prev.map(s => s.id === staffId ? { ...s, ...updates } : s));
+                }
+            } catch (e) {
+                console.warn('Eccezione update staff, fallback locale', e);
+                setStaff(prev => prev.map(s => s.id === staffId ? { ...s, ...updates } : s));
+            }
         }
-        // This is needed because the mockStaff in constants.ts is also used by authService
         const staffMember = mockStaff.find(s => s.id === staffId);
         if (staffMember) {
             Object.assign(staffMember, updates);
         }
-    }, []);
+    }, [isRemote]);
     
     const changePassword = useCallback(async (staffId: string, oldPassword: string, newPassword: string): Promise<void> => {
         const staffMember = staff.find(s => s.id === staffId);

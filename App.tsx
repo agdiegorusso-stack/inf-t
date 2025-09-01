@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { ShiftCalendar } from './components/ShiftCalendar';
 import { Header } from './components/Header';
 import { FilterControls } from './components/FilterControls';
@@ -53,6 +53,33 @@ const App: React.FC = () => {
     const [selectedStaffForDetail, setSelectedStaffForDetail] = useState<Staff | null>(null);
     const [view, setView] = useState<'calendar' | 'planner' | 'personnel'>('calendar');
     const [activeTab, setActiveTab] = useState<ActiveTab>('nurses');
+
+    // Restore user session from localStorage on first mount
+    useEffect(() => {
+        if (!currentUser) {
+            try {
+                const stored = localStorage.getItem('currentUser');
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (parsed && parsed.id) {
+                        setCurrentUser(parsed);
+                    }
+                }
+            } catch {
+                // ignore parse errors
+            }
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Persist currentUser to localStorage (or clear on logout)
+    useEffect(() => {
+        if (currentUser) {
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        } else {
+            localStorage.removeItem('currentUser');
+        }
+    }, [currentUser]);
 
     const handleLogin = useCallback(async (staffId: string, password: string) => {
         setIsAuthLoading(true);
